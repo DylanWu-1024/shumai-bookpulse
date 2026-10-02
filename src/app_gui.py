@@ -137,7 +137,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.0'
+APP_VERSION = '2.1'
 
 
 # ==========================================================================
