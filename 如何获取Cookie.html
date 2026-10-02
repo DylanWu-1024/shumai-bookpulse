@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>怎么拿到微信读书的 Cookie · 书脉 BookPulse</title>
+<style>
+  :root{
+    --ink:#1B1A2E; --ink-2:#4A4860; --ink-3:#8B8AAE;
+    --line:#E6E5F2; --bg:#F7F7FC; --card:#FFFFFF;
+    --p1:#6D5BD0; --p2:#8B7BE8; --soft:#F1F0FB;
+    --ok:#1F9254; --ok-bg:#E8F7EE;
+    --warn:#B7791F; --warn-bg:#FFF7E6;
+    --bad:#C0392B; --bad-bg:#FDECEA;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 80px}
+  header{
+    background:linear-gradient(135deg,#1E1B4B 0%,#312E81 55%,#4C1D95 100%);
+    color:#fff;border-radius:18px;padding:30px 30px 26px;margin-bottom:28px;
+    box-shadow:0 12px 34px rgba(49,46,129,.22);
+  }
+  header h1{margin:0 0 8px;font-size:27px;letter-spacing:.3px}
+  header p{margin:0;color:#C7D2FE;font-size:14.5px}
+  .pill{display:inline-block;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+        padding:3px 11px;border-radius:999px;font-size:12.5px;margin-top:14px;margin-right:6px}
+  h2{font-size:20px;margin:38px 0 14px;padding-left:12px;border-left:4px solid var(--p1)}
+  h3{font-size:16px;margin:24px 0 10px}
+  p{margin:10px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;
+        box-shadow:0 2px 10px rgba(30,27,75,.05)}
+  .card + .card{margin-top:14px}
+  .tag{display:inline-block;font-size:12.5px;font-weight:600;padding:2px 9px;border-radius:6px;
+       margin-right:8px;vertical-align:1px}
+  .tag.a{background:var(--ok-bg);color:var(--ok)}
+  .tag.b{background:var(--soft);color:var(--p1)}
+  .tag.c{background:#F0F0F5;color:var(--ink-3)}
+  .tag.no{background:var(--bad-bg);color:var(--bad)}
+  ol,ul{margin:10px 0;padding-left:22px}
+  li{margin:7px 0}
+  kbd{
+    display:inline-block;background:#fff;border:1px solid #C9C7DA;border-bottom-width:2px;
+    border-radius:6px;padding:1px 7px;font:13px/1.5 Consolas,monospace;color:var(--ink);
+  }
+  code{background:var(--soft);border-radius:5px;padding:1.5px 6px;
+       font:13px/1.5 Consolas,"Courier New",monospace;color:#3B2E86;word-break:break-all}
+  pre{background:#1E1B4B;color:#E0E7FF;border-radius:11px;padding:14px 16px;overflow-x:auto;
+      font:12.5px/1.65 Consolas,monospace;margin:12px 0}
+  pre .k{color:#93C5FD}
+  pre .v{color:#F9A8D4}
+  .box{border-radius:11px;padding:14px 16px;margin:14px 0;font-size:14.5px}
+  .box.tip{background:var(--soft);border-left:4px solid var(--p1)}
+  .box.ok{background:var(--ok-bg);border-left:4px solid var(--ok)}
+  .box.warn{background:var(--warn-bg);border-left:4px solid var(--warn)}
+  .box.bad{background:var(--bad-bg);border-left:4px solid var(--bad)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;background:#fff;
+        border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--soft);font-weight:600;color:var(--ink-2);font-size:13.5px}
+  tr:last-child td{border-bottom:none}
+  .muted{color:var(--ink-3);font-size:13.5px}
+  footer{margin-top:44px;text-align:center;color:var(--ink-3);font-size:13px}
+  .stepnum{display:inline-flex;align-items:center;justify-content:center;
+           width:24px;height:24px;border-radius:50%;background:var(--p1);color:#fff;
+           font-size:13px;font-weight:700;margin-right:8px;flex:none}
+  .step{display:flex;align-items:flex-start;margin:9px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>怎么拿到微信读书的 Cookie</h1>
+  <p>书脉 BookPulse · 图文版操作说明 · 只需要做一次，通常能管数周到数月</p>
+  <span class="pill">Windows / Mac 通用</span>
+  <span class="pill">Chrome / Edge / 新版 Edge 内核浏览器</span>
+</header>
+
+<div class="box tip">
+  <b>先说清楚：Cookie 是什么、为什么要它？</b><br>
+  Cookie 是浏览器登录后拿到的一小段「通行证」。带上它，微信读书才知道「是你本人」。
+  抓<b>热门划线</b>不需要登录，所以不需要 Cookie；但 <b>AI 大纲的正文</b>接口必须登录才给，
+  不带就返回 <code>403</code>。<br>
+  它只存在你自己电脑的 <code>data/settings.json</code> 里，<b>只用于 AI 大纲这一项</b>，
+  不会上传到任何地方。不想要了，把设置里那个框清空即可。
+</div>
+
+<h2>方法 A（最推荐）：从 Network 里复制 Cookie 那一行</h2>
+<div class="card">
+  <p>这是<b>最可靠</b>的办法，因为它就是浏览器真正发出去的东西，一个都不会漏。</p>
+
+  <div class="step"><span class="stepnum">1</span><div>打开微信读书并确认已登录：<code>https://weread.qq.com/</code>
+    <br><span class="muted">（也可以直接在程序里点 设置 → 微信读书登录 → 「打开微信读书（去登录）」）</span></div></div>
+
+  <div class="step"><span class="stepnum">2</span><div>按 <kbd>F12</kbd> 打开开发者工具，切到顶部标签
+    <b>Network / 网络</b>。</div></div>
+
+  <div class="step"><span class="stepnum">3</span><div><b>刷新一下页面</b>，让列表里出现请求；列表里会刷出很多条目。</div></div>
+
+  <div class="step"><span class="stepnum">4</span><div>在列表里<b>随便点一条</b>（点第一条也行）。右侧会展开这个请求的详情。</div></div>
+
+  <div class="step"><span class="stepnum">5</span><div>在右侧找到 <b>Request Headers / 请求标头</b> 分组，
+    里面有一行叫 <code>Cookie</code>。
+    <br><span class="muted">如果没看到这一行，点一下该分组的 <b>「展开」/ Raw</b> 按钮。</span></div></div>
+
+  <div class="step"><span class="stepnum">6</span><div><b>在 <code>Cookie</code> 那一行上点右键 → 选「Copy value / 复制值」。</b>
+    <br>复制到的内容会长这样（一长串 <code>名字=值</code>）：</div></div>
+
+<pre>gid=<span class="v">1a0d0c9d…</span>; wr_gid=<span class="v">236719037</span>; wr_localvid=<span class="v">0af32fa0…</span>;
+wr_name=<span class="v">DylanWu</span>; wr_vid=<span class="v">931802091</span>; wr_rt=<span class="v">o2uxBws…</span>;
+wr_skey=<span class="v">H2uiy1ga</span>; wr_fp=<span class="v">828482527</span></pre>
+
+  <div class="step"><span class="stepnum">7</span><div>回到书脉 → <b>设置</b> → <b>微信读书登录</b> → 点
+    <b>「从剪贴板粘贴」</b>。</div></div>
+
+  <div class="step"><span class="stepnum">8</span><div>看下面的提示：应当出现
+    <b>「识别到关键字段：wr_vid / wr_skey / …」</b>。看到 <code>wr_vid</code> 和 <code>wr_skey</code> 就说明复制对了。</div></div>
+</div>
+
+<h2>方法 B（一键最省事）：Copy as cURL</h2>
+<div class="card">
+  <p>比方法 A 还少几步，程序同样认得这一整段。</p>
+  <ol>
+    <li>同方法 A 的第 1~4 步：<kbd>F12</kbd> → <b>Network</b> → 刷新 → 点一条请求</li>
+    <li>在那条请求上<b>点右键</b> → <b>Copy（复制）</b> → <b>Copy as cURL (bash)</b></li>
+    <li>回程序 → 设置 → 微信读书登录 → <b>「从剪贴板粘贴」</b></li>
+  </ol>
+  <p class="muted">粘贴进去的会是一大段以 <code>curl</code> 开头的文字，这是正常的 —— 程序会自动只挑出
+    Cookie 那一行，其余的参数全部忽略。</p>
+</div>
+
+<h2>方法 C（备选）：Application 面板</h2>
+<div class="card">
+  <p>这个位置的 Cookie 用鼠标<b>框选多行</b>再复制也能用，但我把它排在后面，原因见下方红框。</p>
+  <ol>
+    <li><kbd>F12</kbd> → 顶部切到 <b>Application / 应用程序</b></li>
+    <li>左侧 <b>Storage → Cookies</b> → 点开 <b>https://weread.qq.com</b></li>
+    <li>在表格里把 <code>wr_vid</code>、<code>wr_skey</code>、<code>wr_rt</code>、<code>wr_localvid</code>、
+        <code>wr_gid</code>、<code>wr_fp</code> 这几行<b>选中 → 复制</b></li>
+    <li>回程序粘贴。表格里带过来的「域 / 过期时间 / 大小」等多余列会被自动丢掉</li>
+  </ol>
+  <div class="box warn">
+    <b>为什么不推荐在这里一行一行抄？</b><br>
+    表格里字段很多（还有 <code>_ga</code>、<code>_clck</code> 这些和登录无关的），
+    手抄容易漏掉或抄错 <code>wr_skey</code>、<code>wr_vid</code> 的字符 —— 一旦错一个字符，
+    接口就会拒绝，而错误信息只有一句 <code>403</code>，很难排查。
+  </div>
+</div>
+
+<h2>❌ 不要用 <code>copy(document.cookie)</code></h2>
+<div class="box bad">
+  在 Console 里执行 <code>copy(document.cookie)</code> <b>看起来能拿到东西，但可能缺关键的</b>：<br>
+  标了 <b>HttpOnly</b> 的 Cookie，JavaScript 根本读不到 —— 而 <code>wr_skey</code> 常常就是其中之一。
+  结果就是「看着复制到一大串、程序也说识别到了字段，但一测就 403」。<br>
+  所以请用方法 A 或 B。这一条我上一版说明里写错了，这里更正。
+</div>
+
+<h2>粘完怎么确认弄对了</h2>
+<div class="card">
+  <table>
+    <tr><th style="width:38%">你看到的</th><th>说明</th><th style="width:16%">下一步</th></tr>
+    <tr>
+      <td>提示「识别到关键字段：<b>wr_vid / wr_skey</b> / …」</td>
+      <td>格式正确，程序认出了登录凭据</td>
+      <td>点「测试连接」</td>
+    </tr>
+    <tr>
+      <td>提示「没识别到 Cookie 关键字段」</td>
+      <td>多半是复制到了<b>别的地方</b>（比如响应头 Response Headers，那里没有 Cookie）</td>
+      <td>回到方法 A 第 5 步，确认是 <b>Request</b> Headers</td>
+    </tr>
+    <tr>
+      <td>测试后提示「章节列表拿到了，但正文没取到」</td>
+      <td>Cookie 有效、服务端认出了你的账号，但正文接口还拒绝（程序侧我仍在排查）</td>
+      <td>先用「在微信读书打开大纲」在浏览器看</td>
+    </tr>
+  </table>
+</div>
+
+<h2>常见问题</h2>
+<div class="card">
+  <h3>为什么热门划线不用 Cookie，AI 大纲就要？</h3>
+  <p>因为它们是两个不同的接口。<b>热门划线</b>是公开数据，任何人（含未登录）都能取；
+    <b>AI 大纲正文</b>被微信读书放在登录墙后面，不带通行证直接 <code>403</code>。
+    就像一个网站，公开页面谁都能看，但「我的笔记」得先登录。</p>
+
+  <h3>Cookie 会过期吗？</h3>
+  <p>会，但不是按天算。多数情况下能用<b>数周到数月</b>。等到程序开始提示登录失效，
+    按上面的方法再复制一次即可（一两分钟的事）。</p>
+
+  <h3>是不是每本书都有 AI 大纲？</h3>
+  <p><b>不是。</b>取决于微信读书有没有为这本书生成。程序会明确告诉你：
+    点「获取」后，如果这本书一章都没有要点，会直接提示
+    「微信读书没有为这本书生成 AI 大纲」。<br>
+    另外注意：<b>章节列表</b>是免登录就能拿到的 —— 也就是「这本书有几章、哪几章带 AI 要点」
+    不看登录也一清二楚，只有要点<b>正文</b>才需要登录。</p>
+
+  <h3>换了浏览器 / 清了浏览器数据怎么办？</h3>
+  <p>Cookie 跟着浏览器走。换了浏览器或清了站点数据，就按上面的方法重新复制一次。</p>
+
+  <h3>安全吗？</h3>
+  <p>Cookie 存在你自己电脑上，只用于 AI 大纲接口；程序抓热门划线时<b>从不携带</b>任何登录信息。
+    所有源码在 GitHub 上公开可查，可以自己搜 <code>Cookie</code> 确认它只出现在登录相关的那几行。
+    不放心就随时把设置里的框清空。</p>
+</div>
+
+<footer>
+  书脉 BookPulse · 个人学习项目 · 内容来自微信读书读者公开划线，仅供个人学习使用
+</footer>
+
+</div>
+</body>
+</html>

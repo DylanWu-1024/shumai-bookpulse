@@ -137,7 +137,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.2'
+APP_VERSION = '2.3'
 
 
 # ==========================================================================
@@ -3261,6 +3261,12 @@ class OutlinePage(QWidget):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_fetch)
         bar.addWidget(self.btn_stop)
+        # 去浏览器里直接看这本书的大纲 —— 正文接口还没打通时，这是最快的出路
+        self.btn_wr = QPushButton('\U0001F4D6  ' + T('outline.open_weread'))
+        self.btn_wr.setProperty('flat', True)
+        self.btn_wr.setCursor(Qt.PointingHandCursor)
+        self.btn_wr.clicked.connect(self.open_in_weread)
+        bar.addWidget(self.btn_wr)
         bar.addStretch(1)
         self.lb_state = QLabel('')
         self.lb_state.setObjectName('Hint')
@@ -3324,6 +3330,9 @@ class OutlinePage(QWidget):
             for b in books:
                 self.cb_book.addItem('《%s》  %s' % (b.get('title') or '', b.get('author') or ''),
                                      b.get('book_id'))
+                # 原始书名单独存一份 —— 反查官方链接时要用干净的书名去搜
+                self.cb_book.setItemData(self.cb_book.count() - 1,
+                                         b.get('title') or '', Qt.UserRole + 1)
             if cur:
                 i = self.cb_book.findData(cur)
                 if i >= 0:
@@ -3333,6 +3342,43 @@ class OutlinePage(QWidget):
                 self.lb_state.setText('')
         except Exception as e:
             print('[OutlinePage] refresh error:', e, file=sys.stderr)
+
+    def _current_book(self):
+        """当前选中的书 → (book_id, 干净书名)。"""
+        bid = self.cb_book.currentData()
+        title = self.cb_book.itemData(self.cb_book.currentIndex(), Qt.UserRole + 1) or ''
+        return bid, (title or '').strip()
+
+    def open_in_weread(self):
+        """用系统浏览器打开这本书的 **AI 大纲面板**。
+
+        末段锚点 #outline?noScroll=1 是实测抓到的（浏览器里点开 AI 大纲时
+        地址栏就长这样）。登录态由浏览器自己维持，程序不发任何带身份的请求。
+
+        本地书库存的是数字 bookId，而拼地址要 infoId，所以先反查一次官方链接。
+        """
+        bid, title = self._current_book()
+        if not bid:
+            self.win.toast(T('outline.pick'), kind='warn')
+            return
+        self.lb_state.setText(T('outline.link_resolving'))
+        QApplication.processEvents()
+        d = {}
+        try:
+            d = core.resolve_book_link(bid, title) or {}
+        except Exception:
+            d = {}
+        info = d.get('book') or {'infoId': d.get('infoId') or '',
+                                 'deepLink': d.get('deepLink') or '',
+                                 'title': title}
+        url = core.book_outline_url(info)
+        if '/web/reader/' not in (url or ''):
+            self.lb_state.setText(T('outline.link_fail'))
+            self.win.toast(T('outline.link_fail'), kind='warn', hold=5200)
+            return
+        self.lb_state.setText('')
+        QDesktopServices.openUrl(QUrl(url))
+        self.win.toast(T('toast.weread_opened'), kind='ok')
 
     def _cookie(self):
         return (settings.get('weread_cookie') or '').strip()
@@ -3409,14 +3455,26 @@ class OutlinePage(QWidget):
             self.lb_state.setText('')
             self.btn_copy_all.setEnabled(False)
             self.btn_export.setEnabled(False)
+            self.win.toast(T('outline.zero_has', total=len(self.chapters)),
+                           kind='warn', hold=6200)
             return
 
         self.empty.hide()
-        self.lb_state.setText(T('outline.summary', n=n_has, chars=core.num_fmt(chars)))
+        # 说明白「有几章有要点」+「实际取到几章」—— 这两件事必须分开讲，
+        # 否则用户会误以为是程序坏了（其实是有要点但登录态没通过）
+        base = T('outline.summary', n=n_has, chars=core.num_fmt(chars))
+        if n_got == 0:
+            msg = T('outline.has_but_none', total=len(self.chapters), n=n_has)
+            self.win.toast(T('outline.has_but_none_short'), kind='warn', hold=7200)
+        elif n_got < n_has:
+            msg = base + ' · ' + T('outline.partial', got=n_got, n=n_has, miss=n_has - n_got)
+        else:
+            msg = base
+        self.lb_state.setText(msg)
         self.btn_copy_all.setEnabled(bool(self.by_uid))
         self.btn_export.setEnabled(bool(self.by_uid))
         if last_err and n_got < n_has:
-            self.win.toast(T('set.cookie_fail', msg=last_err[:70]), kind='warn', hold=5200)
+            print('[OutlinePage] 抓取失败: %s' % last_err, file=sys.stderr)
 
     # ------------------------------------------------------------------ 交互
     def on_pick(self, row):
@@ -4189,6 +4247,11 @@ class SettingsPage(QWidget):
         b_paste.setCursor(Qt.PointingHandCursor)
         b_paste.clicked.connect(self.on_paste_cookie)
         goto_row.addWidget(b_paste)
+        b_guide = QPushButton(T('set.cookie_guide'))
+        b_guide.setProperty('ghost', True)
+        b_guide.setCursor(Qt.PointingHandCursor)
+        b_guide.clicked.connect(self.on_open_guide)
+        goto_row.addWidget(b_guide)
         goto_row.addStretch(1)
         wv.addLayout(goto_row)
 
@@ -4420,6 +4483,19 @@ class SettingsPage(QWidget):
     def on_open_weread(self):
         """打开微信读书，让用户先登录（登录态由浏览器自己保持）。"""
         QDesktopServices.openUrl(QUrl('https://weread.qq.com/'))
+
+    def on_open_guide(self):
+        """打开《如何获取Cookie.html》图文教程。
+
+        优先用程序旁边的本地文件；找不到（比如只拷了 exe）就去 GitHub 上取。
+        """
+        path = os.path.join(core.app_dir(), '如何获取Cookie.html')
+        if os.path.exists(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            return
+        QDesktopServices.openUrl(QUrl(
+            'https://github.com/DylanWu-1024/shumai-bookpulse/blob/main/'
+            '%E5%A6%82%E4%BD%95%E8%8E%B7%E5%8F%96Cookie.html'))
 
     def on_paste_cookie(self):
         """从剪贴板读入 Cookie —— 省得在一个小框里手工粘贴长字符串。"""

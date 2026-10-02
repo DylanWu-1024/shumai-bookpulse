@@ -671,6 +671,49 @@ def book_url(book):
     return ''
 
 
+def book_outline_url(book):
+    """阅读器里**直接展开 AI 大纲面板**的地址。
+
+    末段 `#outline?noScroll=1` 是实测抓到的锚点（用户在浏览器里点开
+    AI 大纲时地址栏就是这个样子）。打开后左侧就是「AI 大纲 / 本章由
+    AI 生成，仅供参考」那一栏，可以逐章看。
+    """
+    u = book_reader_url(book)
+    return (u + '#outline?noScroll=1') if u else ''
+
+
+# bookId → deepLink 的进程内缓存，避免同一个 bookId 反复搜索
+_LINK_CACHE = {}
+
+
+def resolve_book_link(book_id, title=''):
+    """按 bookId 反查官方链接（deepLink / infoId）。
+
+    为什么要反查：本地书库里存的是**数字 bookId**，而拼阅读器地址需要
+    **infoId**，两者不能互推。唯一的来源是搜索接口直给的 deepLink，
+    所以这里用书名搜一次，再按 bookId 精确匹配那一条。
+
+    返回 {'deepLink':..., 'infoId':...}；查不到就给空串（不抛异常）。
+    """
+    bid = str(book_id or '').strip()
+    if not bid:
+        return {'deepLink': '', 'infoId': '', 'book': {}}
+    if bid in _LINK_CACHE:
+        return _LINK_CACHE[bid]
+    out = {'deepLink': '', 'infoId': '', 'book': {}}
+    try:
+        for cand in search_books(title, timeout=15):
+            if str(cand.get('bookId') or '') == bid:
+                out = {'deepLink': cand.get('deepLink') or '',
+                       'infoId': cand.get('infoId') or '',
+                       'book': cand}
+                break
+    except Exception:
+        pass
+    _LINK_CACHE[bid] = out
+    return out
+
+
 def rating_percent(book):
     """把推荐值换算成百分比字符串（如 '92.0%'）；拿不到时返回空串。"""
     try:
