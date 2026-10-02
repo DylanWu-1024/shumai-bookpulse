@@ -36,7 +36,14 @@ def _post(webhook, payload, timeout=15):
         headers={'Content-Type': 'application/json; charset=utf-8'},
         method='POST')
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        # 走 core 的统一出口，遵守「设置 → 网络 → 连接方式」；
+        # core 缺席时（独立调用本模块）退回系统默认。
+        try:
+            import core as _core
+            opener = _core.open_request
+        except ImportError:
+            opener = urllib.request.urlopen
+        with opener(req, timeout=timeout) as r:
             raw = r.read().decode('utf-8', 'replace')
     except urllib.error.HTTPError as e:
         raise FeishuError('飞书返回 HTTP %s' % e.code)

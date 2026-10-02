@@ -198,7 +198,13 @@ def _post(url, headers, payload, timeout):
     req = urllib.request.Request(
         url, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
         headers=headers, method='POST')
-    return urllib.request.urlopen(req, timeout=timeout)
+    # 走 core 的统一出口，遵守「设置 → 网络 → 连接方式」。
+    # 以前这里用裸 urlopen：代理设置改了它不跟，代理一挂这里就超时/失败。
+    try:
+        import core as _core
+        return _core.open_request(req, timeout=timeout)
+    except ImportError:
+        return urllib.request.urlopen(req, timeout=timeout)
 
 
 # --------------------------------------------------------------------------

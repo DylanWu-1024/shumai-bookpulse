@@ -95,10 +95,24 @@ class WereadError(Exception):
 # --------------------------------------------------------------------------
 # 网络配置。core 不 import settings（命令行版也要能用），
 # 所以由界面层在启动时通过 set_net() 灌进来。
-NET = {'timeout': 25, 'retries': 3, 'proxy': ''}
+#
+# proxy_mode 三种取值（这是「越用越慢」那个坑的根治点）：
+#   'direct' —— 直连，**显式忽略**系统/环境代理。默认值。
+#   'system' —— 跟随环境变量 / Windows 系统代理设置。
+#   'custom' —— 用 proxy 里填的地址。
+#
+# 为什么默认 direct：微信读书是国内站点，直连本来就只有 0.2~0.4 秒。
+# 而 Windows 上系统代理的注册表值（ProxyServer）在 Clash 关掉后**不会清空**，
+# 只把 ProxyEnable 置 0；可只要代理程序还留着环境变量、或者代理在跑但规则把
+# 国内域名也绕到境外节点，请求就会先撞死端口、再退避重试四次 —— 单次最坏等
+# 十几秒。实测：吃死代理 2.05s 直接失败 vs 直连 0.32s 成功。
+# --------------------------------------------------------------------------
+NET = {'timeout': 25, 'retries': 3, 'proxy': '', 'proxy_mode': 'direct'}
+
+PROXY_MODES = ('direct', 'system', 'custom')
 
 
-def set_net(timeout=None, retries=None, proxy=None):
+def set_net(timeout=None, retries=None, proxy=None, proxy_mode=None):
     """由界面层调用，把设置里的网络选项同步下来。"""
     try:
         if timeout is not None:
@@ -107,7 +121,13 @@ def set_net(timeout=None, retries=None, proxy=None):
             NET['retries'] = max(0, min(8, int(retries)))
         if proxy is not None:
             NET['proxy'] = str(proxy or '').strip()
-            _reset_opener()
+        if proxy_mode is not None:
+            m = str(proxy_mode or '').strip().lower()
+            NET['proxy_mode'] = m if m in PROXY_MODES else 'direct'
+        # 填了地址就说明用户想用自定义代理，自动切过去，省得再点一次
+        if proxy is not None and str(proxy).strip() and proxy_mode is None:
+            NET['proxy_mode'] = 'custom'
+        _reset_opener()
     except Exception:
         pass
 
@@ -122,18 +142,80 @@ def _reset_opener():
     _OPENER_PROXY = None
 
 
+def build_opener_for(proxy_mode, proxy=''):
+    """按指定模式造一个 opener。
+
+    单独抽出来是为了让「网络自检」能在不改全局状态的前提下逐个试。
+    """
+    mode = (proxy_mode or 'direct').strip().lower()
+    p = (proxy or '').strip()
+    if mode == 'custom' and p:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({'http': p, 'https': p}))
+    if mode == 'system':
+        # 不带参数 = 用 urllib 默认链，会读环境变量与系统设置
+        return urllib.request.build_opener()
+    # direct：空 ProxyHandler = 明确禁用所有代理，环境变量也不起作用
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _opener():
-    """带代理的 opener；代理没配就走系统默认（含环境变量代理）。"""
     global _OPENER, _OPENER_PROXY
+    mode = NET.get('proxy_mode') or 'direct'
     p = (NET.get('proxy') or '').strip()
-    if _OPENER is None or _OPENER_PROXY != p:
-        if p:
-            _OPENER = urllib.request.build_opener(
-                urllib.request.ProxyHandler({'http': p, 'https': p}))
-        else:
-            _OPENER = urllib.request.build_opener()
-        _OPENER_PROXY = p
+    if _OPENER is None or _OPENER_PROXY != (mode, p):
+        _OPENER = build_opener_for(mode, p)
+        _OPENER_PROXY = (mode, p)
     return _OPENER
+
+
+def open_request(req, timeout=None):
+    """**所有对外请求的统一出口**。
+
+    其他模块（ai.py 调大模型、feishu.py 推飞书）都走这里，
+    这样「设置 → 网络 → 连接方式」一处生效、全局一致 ——
+    不会再出现「抓取走了代理、封面/AI 各自走另一套」这种分裂。
+    """
+    return _opener().open(req, timeout=int(timeout or NET['timeout']))
+
+
+def system_proxy_hint():
+    """当前系统/环境里到底有没有代理，给界面显示用（不联网）。"""
+    try:
+        px = urllib.request.getproxies() or {}
+    except Exception:
+        return {'has': False, 'http': '', 'https': ''}
+    h = (px.get('https') or px.get('http') or '').strip()
+    return {'has': bool(h), 'http': px.get('http') or '', 'https': px.get('https') or ''}
+
+
+def net_selftest(timeout=8):
+    """逐个试「直连 / 系统代理 / 自定义」，量出真实耗时。
+
+    返回 [{'mode':..., 'ok':bool, 'ms':int, 'note':str}, ...]
+    用途：用户的代理时开时关、端口还可能换，靠这个一键看出哪种最快。
+    """
+    url = API_SEARCH.format(kw=urllib.parse.quote('活着'))
+    out = []
+    plans = [('direct', ''), ('system', '')]
+    if (NET.get('proxy') or '').strip():
+        plans.append(('custom', NET['proxy'].strip()))
+    for mode, p in plans:
+        t0 = time.time()
+        note = ''
+        ok = False
+        try:
+            op = build_opener_for(mode, p)
+            req = urllib.request.Request(url, headers=_headers())
+            with op.open(req, timeout=max(3, int(timeout))) as r:
+                body = r.read()
+            ok = bool(body)
+            note = '%d 字节' % len(body)
+        except Exception as e:
+            note = str(e)[:58]
+        out.append({'mode': mode, 'ok': ok,
+                    'ms': int((time.time() - t0) * 1000), 'note': note})
+    return out
 
 
 def _headers():
@@ -192,7 +274,7 @@ def post_json(url, payload, cookie='', timeout=None, retries=None):
     h['Content-Type'] = 'application/json'
     h['Origin'] = 'https://weread.qq.com'
     if cookie:
-        h['Cookie'] = cookie
+        h['Cookie'] = normalize_cookie(cookie) or cookie
     last = None
 
     for attempt in range(max(1, tries + 1)):
@@ -350,15 +432,144 @@ def search_books(keyword, timeout=None):
             # 坑：URL 里的 v 是 infoId，和 bookId 不是一回事 —— 用 bookId 拼
             # bookDetail/<bookId> 实测返回 404，所以只能原样保存这个字段。
             'deepLink': info.get('deepLink') or '',
+            # 从 deepLink 里抠出 infoId，供阅读器地址使用（见 book_reader_url）。
+            'infoId': _info_id_from_link(info.get('deepLink') or ''),
         })
     return out
 
 
-def book_url(book):
-    """返回这本书在微信读书网页版的地址（供「在微信读书打开」用）。
+# 微信读书登录态里真正起作用的几个字段（其余字段带不带都行）
+COOKIE_KEY_NAMES = ('wr_vid', 'wr_skey', 'wr_rt', 'wr_localvid',
+                    'wr_gid', 'wr_fp', 'wr_uid', 'wr_name')
 
-    优先 deepLink（接口直给、实测三本书都直接 200）；
-    万一没有，退回按书名搜索页 —— 一定打得开，总比 404 强。
+
+def cookie_keys(cookie):
+    """从粘贴进来的内容里认出含哪些关键字段。
+
+    用户可能从 DevTools 复制成好几种样子，这里都认：
+      · 标准串      wr_vid=123; wr_skey=abc;
+      · 一行一个    每行「名字=值」
+      · JSON        {"wr_vid": "123", "wr_skey": "abc"}（某些插件导出成这个）
+      · 带路径域    名字=值; Path=/; Domain=.weread.qq.com
+    """
+    s = cookie or ''
+    if not s.strip():
+        return []
+    names = set()
+    # JSON 形态
+    st = s.strip()
+    if st.startswith('{') or st.startswith('['):
+        try:
+            import json as _json
+            obj = _json.loads(st)
+            if isinstance(obj, dict):
+                names |= {str(k).strip() for k in obj.keys()}
+            elif isinstance(obj, list):
+                for it in obj:
+                    if isinstance(it, dict) and it.get('name'):
+                        names.add(str(it['name']).strip())
+        except Exception:
+            pass
+    # 常规「名=值」形态（; 或换行分隔）
+    for chunk in s.replace('\r', '\n').replace('\n', ';').split(';'):
+        chunk = chunk.strip()
+        if not chunk or '=' not in chunk:
+            continue
+        nm = chunk.split('=', 1)[0].strip()
+        if nm:
+            names.add(nm)
+    return [k for k in COOKIE_KEY_NAMES if k in names]
+
+
+def normalize_cookie(cookie):
+    """把用户粘的内容整理成标准 Cookie 头（顺带丢掉 Path/Domain 等属性）。
+
+    这样即使他从 DevTools 整行复制（含 Path=/; Domain=.weread.qq.com），
+    也能正常当 Cookie 发出去。
+    """
+    s = (cookie or '').strip()
+    if not s:
+        return ''
+    # JSON 形态（某些浏览器插件导出成这样），先转成「名=值」串
+    if s.startswith('{') or s.startswith('['):
+        try:
+            import json as _json
+            obj = _json.loads(s)
+            items = []
+            if isinstance(obj, dict):
+                items = list(obj.items())
+            elif isinstance(obj, list):
+                for it in obj:
+                    if isinstance(it, dict) and it.get('name') is not None:
+                        items.append((it.get('name'), it.get('value', '')))
+            if items:
+                s = '; '.join('%s=%s' % (k, v) for k, v in items)
+        except Exception:
+            pass
+    pairs = []
+    for chunk in s.replace('\r', '\n').replace('\n', ';').split(';'):
+        chunk = chunk.strip()
+        if not chunk or '=' not in chunk:
+            continue
+        nm, val = chunk.split('=', 1)
+        nm, val = nm.strip(), val.strip()
+        # 跳过 Cookie 属性，它们不该出现在请求头里
+        if nm.lower() in ('path', 'domain', 'expires', 'max-age',
+                          'samesite', 'secure', 'httponly', 'priority'):
+            continue
+        if nm:
+            pairs.append('%s=%s' % (nm, val))
+    return '; '.join(pairs)
+
+
+def _info_id_from_link(link):
+    """从 book-detail / reader 链接里取出 infoId（形如 5ff32970721696fb5ffc757）。
+
+    微信读书有两套 ID：
+      · bookId  —— 纯数字（35034875），接口用
+      · infoId  —— 24 位十六进制（5ff32970721696fb5ffc757），URL 用
+    两者不能互推，只能用接口直给的 deepLink。
+    """
+    s = (link or '').strip()
+    if not s:
+        return ''
+    try:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(s).query)
+        v = (q.get('v') or [''])[0].strip()
+        if v:
+            return v
+        # 已是 /web/reader/<infoId> 形态，取最后一段
+        path = urllib.parse.urlparse(s).path.rstrip('/')
+        seg = path.rsplit('/', 1)[-1]
+        if seg and seg != 'reader':
+            return seg.split('k')[0]
+    except Exception:
+        pass
+    return ''
+
+
+def book_reader_url(book):
+    """这本书**可以直接开始阅读**的地址（「在微信读书打开」按钮用这个）。
+
+    实测（2026-10-03，三本书交叉验证）：
+      · /book-detail?type=1&v=<infoId>  → 126KB，<title> 就是「微信读书」→ **详情页**
+      · /web/reader/<infoId>            → 201KB，<title> 是「书名 - 作者 - 微信读书」，
+                                          页面含 renderTarget → **阅读器**（可点可读）
+    所以要直达阅读界面，必须拼 /web/reader/，不能用接口给的 deepLink 原样打开。
+    """
+    b = book or {}
+    inf = (b.get('infoId') or '').strip() or _info_id_from_link(b.get('deepLink') or '')
+    if inf:
+        return 'https://weread.qq.com/web/reader/' + inf
+    # 兜底：详情页（至少能进书）
+    return book_url(b)
+
+
+def book_url(book):
+    """这本书的**详情页**地址（书架信息、简介、评分那一页）。
+
+    优先 deepLink（接口直给）；万一没有，退回按书名搜索页 ——
+    一定打得开，总比 404 强。
     """
     b = book or {}
     dl = (b.get('deepLink') or '').strip()

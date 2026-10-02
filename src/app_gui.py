@@ -21,6 +21,7 @@ import time
 import random
 import ctypes
 import datetime
+import urllib.request
 from ctypes import wintypes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +68,8 @@ def apply_net_settings():
     try:
         core.set_net(timeout=int(settings.get('net_timeout') or 25),
                      retries=int(settings.get('net_retries') or 3),
-                     proxy=settings.get('net_proxy') or '')
+                     proxy=settings.get('net_proxy') or '',
+                     proxy_mode=settings.get('net_proxy_mode') or 'direct')
     except Exception:
         pass
 
@@ -307,7 +309,15 @@ def read_title_list(path):
 
 
 class CoverLoader(QThread):
-    """后台抓候选书的封面。走磁盘缓存，第二次打开秒出。"""
+    """后台抓候选书的封面。走磁盘缓存，第二次打开秒出。
+
+    这里有两个曾经的性能坑，都修掉了：
+      ① 用裸 urllib.request.urlopen —— 它会自己读系统/环境代理，绕开 core 的
+         代理模式设置。代理一挂，每本封面都要等超时，30 本串行 = 几分钟，
+         表现就是「左侧书籍列表加载很久」。
+      ② 一本一本来 —— 改成 4 路并发，并且把磁盘缓存里的**先一次性全发出去**，
+         所以第二次搜同样的词，封面是瞬间出现的。
+    """
 
     one = Signal(str, bytes)
 
@@ -316,30 +326,57 @@ class CoverLoader(QThread):
         self.books = books
         self.cache_dir = cache_dir
 
+    def _emit_cached(self, b):
+        bid = b.get('bookId') or ''
+        path = os.path.join(self.cache_dir, bid + '.img')
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 512:
+                with open(path, 'rb') as f:
+                    self.one.emit(bid, f.read())
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _fetch_one(self, b):
+        bid = b.get('bookId') or ''
+        url = b.get('cover') or ''
+        if not bid or not url:
+            return
+        path = os.path.join(self.cache_dir, bid + '.img')
+        try:
+            # 走 core 的 opener —— 与主流程用同一套代理设置，不再各自为政
+            req = urllib.request.Request(url, headers={'User-Agent': core.UA})
+            with core._opener().open(req, timeout=8) as r:
+                data = r.read()
+            if len(data) < 512:
+                return
+            os.makedirs(self.cache_dir, exist_ok=True)
+            with open(path, 'wb') as f:
+                f.write(data)
+            self.one.emit(bid, data)
+        except Exception:
+            return          # 封面是锦上添花，失败就跳过
+
     def run(self):
-        import urllib.request
+        todo = []
         for b in self.books:
-            bid = b.get('bookId') or ''
-            url = b.get('cover') or ''
-            if not bid or not url:
-                continue
-            path = os.path.join(self.cache_dir, bid + '.img')
-            try:
-                if os.path.exists(path) and os.path.getsize(path) > 512:
-                    with open(path, 'rb') as f:
-                        self.one.emit(bid, f.read())
-                    continue
-                req = urllib.request.Request(url, headers={'User-Agent': core.UA})
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    data = r.read()
-                if len(data) < 512:
-                    continue
-                os.makedirs(self.cache_dir, exist_ok=True)
-                with open(path, 'wb') as f:
-                    f.write(data)
-                self.one.emit(bid, data)
-            except Exception:
-                continue        # 封面是锦上添花，失败就继续下一本
+            if b.get('bookId') and b.get('cover') and not self._emit_cached(b):
+                todo.append(b)
+        if not todo:
+            return
+        # 4 路并发；用 ThreadPoolExecutor 保证退出时能干净收尾
+        workers = min(4, len(todo))
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = [ex.submit(self._fetch_one, b) for b in todo]
+                for _ in as_completed(futs):
+                    if self.isInterruptionRequested():
+                        break
+        except Exception:
+            for b in todo:          # 兜底：退回串行
+                self._fetch_one(b)
 
 
 class BookItemDelegate(QStyledItemDelegate):
@@ -679,12 +716,16 @@ class SearchPage(QWidget):
         acts = QHBoxLayout()
         acts.setSpacing(8)
 
-        # 去微信读书看这本书：用系统默认浏览器打开官方书籍页。
-        # 登录态完全由浏览器自己维持 —— 程序不读 Cookie、不携带任何凭证。
+        # 去微信读书读这本书：用系统默认浏览器打开**阅读器**页面。
+        # 踩过的坑：接口给的 deepLink 是详情页（book-detail），点进去只有简介，
+        # 得再点一次「开始阅读」。真正能直接读的是 /web/reader/<infoId> ——
+        # 实测该地址 <title> 就是书名，页面含 renderTarget，进去即可点选区域。
         self.btn_weread = QPushButton('\U0001F4D6  ' + T('search.open_in_weread'))
         self.btn_weread.setProperty('flat', True)
         self.btn_weread.setEnabled(False)
         self.btn_weread.clicked.connect(self.open_in_weread)
+        self.btn_weread.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.btn_weread.customContextMenuRequested.connect(self._weread_menu)
         acts.addWidget(self.btn_weread)
 
         self.btn_chapter = QPushButton(T('chapter.btn'))
@@ -912,23 +953,40 @@ class SearchPage(QWidget):
         self.btn_copy.setEnabled(True)
         self.btn_map.setEnabled(True)
 
+    def _open_url(self, url, tip):
+        if not url:
+            self.win.toast(T('toast.no_link'), kind='warn')
+            return
+        try:
+            QDesktopServices.openUrl(QUrl(url))
+            self.win.toast(tip, kind='ok')
+        except Exception as e:
+            QMessageBox.warning(self, T('search.open_in_weread'), str(e))
+
     def open_in_weread(self):
-        """在系统默认浏览器里打开这本书的微信读书页面。
+        """在系统默认浏览器里**直接进入阅读界面**。
 
         登录态由浏览器自己维持 —— 你在浏览器里登录过，打开就是登录状态。
         程序这一侧不发任何带身份的请求，也不读取浏览器的 Cookie。
         """
         if not self.result:
             return
-        url = core.book_url(self.result.get('book') or {})
-        if not url:
-            self.win.toast(T('toast.no_link'), kind='warn')
+        self._open_url(core.book_reader_url(self.result.get('book') or {}),
+                       T('toast.weread_opened'))
+
+    def _weread_menu(self, pos):
+        """右键：想看书架详情（简介/评分）时走这里。"""
+        if not self.result:
             return
-        try:
-            QDesktopServices.openUrl(QUrl(url))
-            self.win.toast(T('toast.weread_opened'), kind='ok')
-        except Exception as e:
-            QMessageBox.warning(self, T('search.open_in_weread'), str(e))
+        book = self.result.get('book') or {}
+        m = QMenu(self)
+        m.addAction(T('search.open_in_weread'),
+                    lambda: self._open_url(core.book_reader_url(book),
+                                           T('toast.weread_opened')))
+        m.addAction(T('search.open_detail'),
+                    lambda: self._open_url(core.book_url(book),
+                                           T('toast.weread_opened')))
+        m.exec(self.btn_weread.mapToGlobal(pos))
 
     def show_chapters(self):
         if self.result:
@@ -3623,6 +3681,22 @@ class SettingsPage(QWidget):
         self._loading = True
         self._build()
         self._loading = False
+        self._sync_cookie_keys()
+
+    def _sync_cookie_keys(self):
+        """把「识别到哪些关键字段」实时显示出来，用户一眼知道有没有粘对。"""
+        try:
+            ck = (self.ed_cookie.text() or '').strip()
+            if not ck:
+                self.lb_cookie_keys.setText('')
+                return
+            keys = core.cookie_keys(ck)
+            if keys:
+                self.lb_cookie_keys.setText(T('set.cookie_detected', keys=' / '.join(keys)))
+            else:
+                self.lb_cookie_keys.setText(T('set.cookie_nokeys'))
+        except Exception:
+            pass
 
     def _group(self, text):
         lb = QLabel(text)
@@ -4101,11 +4175,33 @@ class SettingsPage(QWidget):
         wv = card_layout(c_wr, margins=(16, 15, 16, 17), spacing=12)
         wv.addWidget(self._group('\U0001F510  ' + T('set.weread')))
         wv.addWidget(self._hint(T('set.cookie_hint')))
+
+        # 两步走：先去浏览器登录，再把 Cookie 弄进来
+        goto_row = QHBoxLayout()
+        goto_row.setSpacing(8)
+        b_go = QPushButton(T('set.cookie_open'))
+        b_go.setProperty('ghost', True)
+        b_go.setCursor(Qt.PointingHandCursor)
+        b_go.clicked.connect(self.on_open_weread)
+        goto_row.addWidget(b_go)
+        b_paste = QPushButton(T('set.cookie_paste'))
+        b_paste.setProperty('ghost', True)
+        b_paste.setCursor(Qt.PointingHandCursor)
+        b_paste.clicked.connect(self.on_paste_cookie)
+        goto_row.addWidget(b_paste)
+        goto_row.addStretch(1)
+        wv.addLayout(goto_row)
+
         self.ed_cookie = QLineEdit()
         self.ed_cookie.setText(settings.get('weread_cookie') or '')
         self.ed_cookie.setPlaceholderText(T('set.cookie_ph'))
         self.ed_cookie.textChanged.connect(self.on_cookie)
         wv.addLayout(self._row(T('set.cookie'), self.ed_cookie))
+        self.lb_cookie_keys = QLabel('')
+        self.lb_cookie_keys.setObjectName('Hint')
+        self.lb_cookie_keys.setWordWrap(True)
+        wv.addWidget(self.lb_cookie_keys)
+        wv.addWidget(self._hint(T('set.cookie_howto')))
         wr_row = QHBoxLayout()
         wr_row.setSpacing(8)
         b_ct = QPushButton(T('set.cookie_test'))
@@ -4139,11 +4235,43 @@ class SettingsPage(QWidget):
         self.sp_retries.valueChanged.connect(self.on_net)
         nv2.addLayout(self._row(T('set.retries'), self.sp_retries))
 
+        # 代理模式：直连（默认）/ 跟随系统 / 自定义
+        self.cb_pmode = QComboBox()
+        for val, key in (('direct', 'set.pmode_direct'),
+                         ('system', 'set.pmode_system'),
+                         ('custom', 'set.pmode_custom')):
+            self.cb_pmode.addItem(T(key), val)
+        _sel = self.cb_pmode.findData(settings.get('net_proxy_mode') or 'direct')
+        self.cb_pmode.setCurrentIndex(_sel if _sel >= 0 else 0)
+        self.cb_pmode.currentIndexChanged.connect(self.on_net)
+        nv2.addLayout(self._row(T('set.pmode'), self.cb_pmode, T('set.pmode_hint'), 340))
+
         self.ed_proxy = QLineEdit()
         self.ed_proxy.setText(settings.get('net_proxy') or '')
         self.ed_proxy.setPlaceholderText('http://127.0.0.1:7890')
         self.ed_proxy.textChanged.connect(self.on_net)
         nv2.addLayout(self._row(T('set.proxy'), self.ed_proxy, T('set.proxy_hint')))
+
+        # 网络自检：实测直连 / 系统代理 / 自定义 三种方式各自的真实耗时。
+        # 用来回答「是不是我的网络问题」—— 代理时开时关时这个特别好使。
+        net_row = QHBoxLayout()
+        net_row.setSpacing(8)
+        b_st = QPushButton(T('set.net_test'))
+        b_st.setProperty('ghost', True)
+        b_st.setCursor(Qt.PointingHandCursor)
+        b_st.clicked.connect(self.on_net_test)
+        net_row.addWidget(b_st)
+        net_row.addStretch(1)
+        self.lb_net = QLabel('')
+        self.lb_net.setObjectName('Hint')
+        self.lb_net.setWordWrap(True)
+        net_row.addWidget(self.lb_net, 1)
+        nv2.addLayout(net_row)
+
+        syspx = core.system_proxy_hint()
+        if syspx.get('has'):
+            nv2.addWidget(self._hint(T('set.sys_proxy_found', addr=syspx.get('https')
+                                       or syspx.get('http'))))
         col2.addWidget(c_net)
 
         c_data = W.Card()
@@ -4251,13 +4379,67 @@ class SettingsPage(QWidget):
         settings.set_value('net_timeout', int(self.sp_timeout.value()))
         settings.set_value('net_retries', int(self.sp_retries.value()))
         settings.set_value('net_proxy', self.ed_proxy.text().strip())
+        settings.set_value('net_proxy_mode', self.cb_pmode.currentData() or 'direct')
         apply_net_settings()
+        self.lb_net.setText('')
+
+    def on_net_test(self):
+        """网络自检：把「直连 / 系统代理 / 自定义」逐个真跑一次，报耗时。
+
+        这是回答「是网络问题还是程序慢」最直接的办法 —— 谁快用谁。
+        """
+        self.lb_net.setText(T('outline.loading'))
+        QApplication.processEvents()
+        try:
+            res = core.net_selftest()
+        except Exception as e:
+            self.lb_net.setText(T('set.net_test_fail', msg=str(e)[:60]))
+            return
+        parts, best = [], None
+        for r in res:
+            label = {'direct': T('set.pmode_direct'),
+                     'system': T('set.pmode_system'),
+                     'custom': T('set.pmode_custom')}.get(r['mode'], r['mode'])
+            label = label.split('（')[0]
+            if r['ok']:
+                parts.append('%s %d ms' % (label, r['ms']))
+                if best is None or r['ms'] < best[2]:
+                    best = (r['mode'], label, r['ms'])
+            else:
+                parts.append('%s ✗' % label)
+        self.lb_net.setText(' · '.join(parts))
+        if best:
+            if best[0] != (settings.get('net_proxy_mode') or 'direct'):
+                self.win.toast(T('set.net_test_switch', name=best[1], ms=best[2]),
+                               kind='warn', hold=6200)
+            else:
+                self.win.toast(T('set.net_test_ok', name=best[1], ms=best[2]),
+                               kind='ok', hold=4200)
 
     # ---------------- 微信读书登录（只为 AI 大纲）----------------
+    def on_open_weread(self):
+        """打开微信读书，让用户先登录（登录态由浏览器自己保持）。"""
+        QDesktopServices.openUrl(QUrl('https://weread.qq.com/'))
+
+    def on_paste_cookie(self):
+        """从剪贴板读入 Cookie —— 省得在一个小框里手工粘贴长字符串。"""
+        try:
+            txt = QApplication.clipboard().text() or ''
+        except Exception:
+            txt = ''
+        txt = txt.strip()
+        if not txt:
+            self.lb_cookie_keys.setText(T('set.cookie_paste_fail'))
+            return
+        self.ed_cookie.setText(txt)          # 会触发 on_cookie 落盘
+        self._sync_cookie_keys()
+        self.win.toast(T('set.cookie_pasted', n=len(txt)), kind='ok')
+
     def on_cookie(self, text):
         if self._loading:
             return
         settings.set_value('weread_cookie', (text or '').strip())
+        self._sync_cookie_keys()
 
     def on_test_cookie(self):
         """测一次：拿本地书库里的书试 outline/check + inner，确认登录态真的有效。

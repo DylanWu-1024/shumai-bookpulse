@@ -80,7 +80,7 @@ Markdown · Plain text · **Word (.docx)** · **EPUB** · **PDF** · HTML · Sha
 - 🎯 **Focus mode** — `Ctrl+Shift+F` hides the sidebar and top bar
 - 🪟 **Optional frameless window** — custom title bar that still **keeps native resize / snap / double-click-maximize**
 - 📊 **Sorting**: by popularity or by chapter, switched **in place** in the table — no extra window; exports follow the current order
-- 📖 **Open in WeRead**: one click opens the official book page in your system browser (your browser keeps the sign-in)
+- 📖 **Jump straight into reading**: one click opens the **actual reader view** (`/web/reader/`, not the summary-only detail page) in your system browser, keeping your sign-in; right-click for the detail page
 - ✨ Restrained motion: page fade, staggered card entrance, animated counters, toast slide-in — with a **global off switch**
 
 ---
@@ -336,7 +336,19 @@ As for recommendation score, rating count, rating tier and current readers — t
 
 No. The program talks directly to WeRead's public endpoints and **does not require any VPN**.
 
-If your network environment causes failures, Settings lets you configure **timeout, retry count and an HTTP proxy**. The fetch layer has exponential backoff built in (0.8 → 1.6 → 3.2 s with jitter) and deliberately does **not** retry 4xx responses.
+> ⚠️ **If your proxy app (Clash / v2ray, etc.) is closed, this app can get very slow.**
+> Windows keeps the proxy configuration around even after the app quits, so following it means
+> hitting a dead port and retrying, making everything crawl. WeRead is a domestic site — direct
+> connects in a fraction of a second.
+>
+> **Fix**: Settings → Network → set **Connection** to **Direct (recommended)**, which is the default.
+> To verify, click **Network check** on the same card: it times "Direct" against "Follow system proxy"
+> and tells you which one is faster.
+>
+> This setting covers all outbound traffic: WeRead fetching + AI API calls + Feishu push. If you use a
+> model like OpenAI that needs a proxy, switch it to "Follow system proxy".
+
+Settings also lets you configure **timeout, retry count and a custom proxy URL**. The fetch layer has exponential backoff built in (0.8 → 1.6 → 3.2 s with jitter) and deliberately does **not** retry 4xx responses.
 </details>
 
 <details>
