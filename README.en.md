@@ -58,7 +58,8 @@ WeRead (微信读书) has millions of reader highlights, but the web version off
 ### Processing & Analysis
 | Feature | Description |
 |---|---|
-| **One-click AI organize** | Turn raw quotes into structured notes. **Streaming output**, customizable prompts, results auto-archived |
+| **One-click AI organize** | Turn raw quotes into structured notes. **Fully customizable prompt** — no longer limited to built-in templates; the highlights are appended automatically and never get dropped |
+| **AI Outline** | Per-chapter **AI key points**, on its own page with browse / copy / export (Markdown / plain text / HTML) — see the "AI Outline" section |
 | **Cross-book theme aggregation** | Pick 2–5 books and see *what each of them says about the same question* |
 | **Cross-book dedup & merge** | Similarity clustering (character bigram + Jaccard) groups sentences from different books that say the same thing, ranked by consensus |
 | **Popularity trend charts** | Hand-drawn line and bar charts — how a single quote's highlight count changes over time |
@@ -78,6 +79,8 @@ Markdown · Plain text · **Word (.docx)** · **EPUB** · **PDF** · HTML · Sha
 - ⌨️ **Command palette** — `Ctrl+K`; low-frequency actions live here instead of cluttering the sidebar
 - 🎯 **Focus mode** — `Ctrl+Shift+F` hides the sidebar and top bar
 - 🪟 **Optional frameless window** — custom title bar that still **keeps native resize / snap / double-click-maximize**
+- 📊 **Sorting**: by popularity or by chapter, switched **in place** in the table — no extra window; exports follow the current order
+- 📖 **Open in WeRead**: one click opens the official book page in your system browser (your browser keeps the sign-in)
 - ✨ Restrained motion: page fade, staggered card entrance, animated counters, toast slide-in — with a **global off switch**
 
 ---
@@ -285,6 +288,22 @@ Result: **45 MB** single-file build, **113 MB** onedir build, fastest launch **5
 ## ❓ FAQ
 
 <details>
+<details>
+<summary><b>What is AI Outline, and why does it need a sign-in?</b></summary>
+
+WeRead generates **per-chapter AI key points** for many books (the "AI Outline" feature you see in the app). It is a separate data source from popular highlights, so this project gives it its own page.
+
+Measured (2026-10-02):
+
+- `POST /web/book/outline/check` — chapter structure + which chapters have key points, **no sign-in needed**
+- `POST /web/book/outline/inner` — the actual key-point text, **requires sign-in**; returns `HTTP 403` without a Cookie
+
+So Settings has a "WeRead sign-in": just paste the Cookie from your browser. **Only this one feature sends it** — highlight fetching never does. The cookie stays in your local `data/settings.json`.
+
+Also set your expectations: **not every book has an AI outline.** 活着 has none across all 13 chapters; 短线交易秘诀 has key points in 122 of 125 chapters. The app tells you which case you're in.
+
+</details>
+
 <summary><b>Will this get my WeRead account banned?</b></summary>
 
 **Technically the program cannot be linked to your account**, and this is verifiable at the code level:

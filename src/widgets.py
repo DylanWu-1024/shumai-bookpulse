@@ -174,8 +174,22 @@ class Card(QFrame):
     def __init__(self, parent=None, shadow=True, name='Card'):
         super().__init__(parent)
         self.setObjectName(name)
+        self._has_shadow = bool(shadow)
         if shadow:
             apply_shadow(self)
+
+    def restore_shadow(self):
+        """重新挂回阴影。
+
+        背景：Qt 里一个控件只能挂一个 QGraphicsEffect。卡片入场动效会挂
+        QGraphicsOpacityEffect，这会顶掉卡片原本的阴影；动画结束后若只是
+        简单 setGraphicsEffect(None)，卡片的阴影就永久消失了。
+        所以入场动效结束时调用本方法，把阴影挂回来。
+        """
+        if self._has_shadow:
+            apply_shadow(self)
+        else:
+            self.setGraphicsEffect(None)
 
 
 # ==========================================================================
@@ -1014,11 +1028,16 @@ class CommandPalette(QWidget):
 
         self._build()
 
-        self._fx = QGraphicsOpacityEffect(self)
-        self._fx.setOpacity(0.0)
-        self.setGraphicsEffect(self._fx)
-        self._fade = QPropertyAnimation(self._fx, b'opacity', self)
-        self._fade.setDuration(150)
+        # 【为什么这里没有 QGraphicsOpacityEffect】(2026-10-02 实测踩坑)
+        # 原先给本控件挂 OpacityEffect 做淡入、子面板挂 DropShadowEffect 做阴影，
+        # 实测会出现：面板打开约 1 秒后背景不再绘制 —— 表现为「命令面板变成透明的」。
+        # 定位过程：打开后 300ms 面板中心像素 = #FFFFFF（正常），
+        #           2.5s 后同一坐标 = #6F6E7E（遮罩色，即面板背景消失）。
+        # 原因是 Qt 在多层级同时使用 graphics effect 时渲染管线会失效。
+        # 现在改为：遮罩 alpha 自己动画 + 面板 geometry 上滑 —— 零图形效果，100% 稳定。
+        self._scrim_a = 0.0         # 遮罩不透明度 0~1
+        self._scrim_anim = None
+        self._slide_anim = None
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -1072,6 +1091,46 @@ class CommandPalette(QWidget):
         super().resizeEvent(ev)
         self._fit_panel()
 
+    # ---- 遮罩不透明度（自绘，可被 QPropertyAnimation 驱动）----
+    def _get_scrim(self):
+        return self._scrim_a
+
+    def _set_scrim(self, v):
+        self._scrim_a = float(v)
+        self.update()
+
+    scrimAlpha = Property(float, _get_scrim, _set_scrim)
+
+    def _play_in(self):
+        """入场：遮罩淡入 + 面板自上而下轻滑（约 12px）。"""
+        if not MOTION:
+            self._scrim_a = 1.0
+            self.update()
+            return
+        try:
+            a = QPropertyAnimation(self, b'scrimAlpha', self)
+            a.setDuration(160)
+            a.setStartValue(0.0)
+            a.setEndValue(1.0)
+            a.setEasingCurve(QEasingCurve.OutCubic)
+            a.start()
+            self._scrim_anim = a
+
+            end = self.panel.geometry()
+            start = QRect(end.x(), end.y() + 12, end.width(), end.height())
+            self.panel.setGeometry(start)
+            s = QPropertyAnimation(self.panel, b'geometry', self)
+            s.setDuration(190)
+            s.setStartValue(start)
+            s.setEndValue(end)
+            s.setEasingCurve(QEasingCurve.OutCubic)
+            s.start()
+            self._slide_anim = s
+        except Exception as e:
+            print('[CommandPalette] 入场动效失败:', e, file=_sys.stderr)
+            self._scrim_a = 1.0
+            self.update()
+
     def popup(self, commands):
         """commands: [(id, 显示文本, 关键字)]"""
         self._commands = list(commands)
@@ -1081,24 +1140,24 @@ class CommandPalette(QWidget):
         if par:
             self.setGeometry(0, 0, par.width(), par.height())
         self._fit_panel()
+        self._scrim_a = 0.0
         self.show()
         self.raise_()
         self.input.setFocus()
-        if MOTION:
-            self._fade.stop()
-            self._fade.setStartValue(0.0)
-            self._fade.setEndValue(1.0)
-            self._fade.start()
-        else:
-            self._fx.setOpacity(1.0)
+        self._play_in()
 
     def close_palette(self):
         if MOTION:
-            self._fade.stop()
-            self._fade.setStartValue(self._fx.opacity())
-            self._fade.setEndValue(0.0)
-            self._fade.start()
-            QTimer.singleShot(170, self.hide)
+            try:
+                a = QPropertyAnimation(self, b'scrimAlpha', self)
+                a.setDuration(130)
+                a.setStartValue(self._scrim_a)
+                a.setEndValue(0.0)
+                a.start()
+                self._scrim_anim = a
+            except Exception:
+                pass
+            QTimer.singleShot(150, self.hide)
         else:
             self.hide()
 
@@ -1153,10 +1212,11 @@ class CommandPalette(QWidget):
         try:
             p = QPainter(self)
             rgba = _PAL.get('scrim_rgba') or (20, 18, 45, 97)
-            p.fillRect(self.rect(), QColor(*rgba))
+            a = int(max(0, min(255, rgba[3] * getattr(self, '_scrim_a', 1.0))))
+            p.fillRect(self.rect(), QColor(rgba[0], rgba[1], rgba[2], a))
             p.end()
-        except Exception:
-            pass
+        except Exception as e:
+            print('[CommandPalette] paint error:', e, file=_sys.stderr)
 
     def mousePressEvent(self, ev):
         # 点空白遮罩处关闭

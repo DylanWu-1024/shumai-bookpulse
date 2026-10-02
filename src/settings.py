@@ -14,6 +14,7 @@ DEFAULTS = {
     'radius': 12,            # 圆角大小
     'motion': True,          # 界面动效开关（关掉更安静也更省电）
     'def_count': 100,        # 默认导出条数（0 = 全部）
+    'sort_mode': 'hot',      # 结果排序：hot = 按划线人数降序；chapter = 按章节顺序
     'def_format': 'html',    # 上次选用的单格式
     'export_formats': ['html'],   # 勾选的导出格式（可多选，用于「多格式导出」）
     'export_dir': '',        # 自定义导出目录（空 = 用程序旁的 exports/）
@@ -39,6 +40,9 @@ DEFAULTS = {
     'net_timeout': 25,           # 单次请求超时（秒）
     'net_retries': 3,            # 失败重试次数（指数退避）
     'net_proxy': '',             # 代理，例如 http://127.0.0.1:7890
+    # 微信读书登录 Cookie —— **只用于 AI 大纲接口**（那个接口非要登录态）。
+    # 抓热门划线等公开接口一律不带 Cookie，保持服务端无法归因到账号。
+    'weread_cookie': '',
 
     # ---------------- AI 助手（方向 2 / 3）----------------
     # Key 刻意用「扁平键」而不是嵌套 dict：settings 内部是浅拷贝，

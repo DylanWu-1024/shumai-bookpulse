@@ -133,6 +133,9 @@ BUILTIN_PROMPTS = {
 
 PROMPT_ORDER = ['digest', 'theme', 'action', 'extract']
 
+# 用户自定义提示词里没写 {content} 时，自动追加这一段，保证金句正文一定发出去
+_CONTENT_FALLBACK = '\n\n以下是需要处理的划线内容：\n\n{content}'
+
 
 class AiError(Exception):
     """AI 调用失败。消息直接面向用户，可原样展示。"""
@@ -302,11 +305,18 @@ def _read_stream(resp, on_delta):
 def build_prompt(template, result=None, results=None, max_items=200, max_chars=24000):
     """把抓取结果渲染进提示词模板。
 
-    template: 'digest' / 'theme' / 'action' / 'extract' 或自定义文本
-    result:   单本书的结果（digest/action/extract 用）
-    results:  多本书的结果列表（theme 用）
+    template: 'digest' / 'theme' / 'action' / 'extract'，或**用户自己写的整段提示词**
+    result:   单本书的结果
+    results:  多本书的结果列表（跨书聚合用）
+
+    两个必须保证的事情（用户自定义提示词之后尤其重要）：
+      ① 划线正文一定要发出去 —— 用户很可能不写 {content} 占位符，
+         检测不到就自动把正文附在提示词末尾，而不是静默丢掉内容。
+      ② 用户提示词里若出现别的花括号（比如写了个 JSON 示例），
+         str.format 会抛错 —— 这时退化成占位符替换，不因为一个花括号全盘失败。
     """
     text = _template_text(template)
+
     if results:
         blocks = []
         for r in results:
@@ -314,15 +324,25 @@ def build_prompt(template, result=None, results=None, max_items=200, max_chars=2
                 (r.get('book') or {}).get('title', ''),
                 (r.get('book') or {}).get('author', '') or '佚名',
                 render_lines(r, max_items=max_items)))
-        content = '\n\n'.join(blocks)
-        content = _clip(content, max_chars)
-        return text.format(content=content, title='', author='')
+        content = _clip('\n\n'.join(blocks), max_chars)
+        title, author = '', ''
+    else:
+        r = result or {}
+        book = r.get('book') or {}
+        content = _clip(render_lines(r, max_items=max_items), max_chars)
+        title = book.get('title', '')
+        author = book.get('author', '') or '佚名'
 
-    r = result or {}
-    book = r.get('book') or {}
-    content = _clip(render_lines(r, max_items=max_items), max_chars)
-    return text.format(title=book.get('title', ''), author=book.get('author', '') or '佚名',
-                       content=content)
+    if '{content}' not in text:
+        text = text.rstrip() + _CONTENT_FALLBACK
+
+    try:
+        return text.format(content=content, title=title, author=author)
+    except (KeyError, IndexError, ValueError):
+        out = text.replace('{content}', content)
+        out = out.replace('{title}', title)
+        out = out.replace('{author}', author)
+        return out
 
 
 def _template_text(template):

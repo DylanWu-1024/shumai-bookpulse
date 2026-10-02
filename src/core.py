@@ -179,6 +179,138 @@ def fetch_json(url, timeout=None, retries=None):
     raise WereadError('连续 %d 次请求都失败了：%s' % (tries + 1, last))
 
 
+def post_json(url, payload, cookie='', timeout=None, retries=None):
+    """发一个 POST（JSON body）。
+
+    刻意与 fetch_json 分开：只有 AI 大纲这类**需要登录态**的接口才传 cookie；
+    抓热门划线等公开接口一律不带 —— 保住「服务端无法归因到账号」这条底线。
+    """
+    timeout = int(timeout or NET['timeout'])
+    tries = int(NET['retries'] if retries is None else retries)
+    body = json.dumps(payload).encode('utf-8')
+    h = dict(_headers())
+    h['Content-Type'] = 'application/json'
+    h['Origin'] = 'https://weread.qq.com'
+    if cookie:
+        h['Cookie'] = cookie
+    last = None
+
+    for attempt in range(max(1, tries + 1)):
+        try:
+            req = urllib.request.Request(url, data=body, headers=h, method='POST')
+            with _opener().open(req, timeout=timeout) as r:
+                raw = r.read().decode('utf-8')
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                raise WereadError(
+                    'HTTP 403 —— 微信读书拒绝了这个请求。\n'
+                    'AI 大纲需要登录态：请到「设置 → 微信读书登录」填入 Cookie 后重试。')
+            if e.code == 429 or e.code >= 500:
+                last = 'HTTP %s' % e.code
+            else:
+                raise WereadError('服务端返回 HTTP %s（这个请求本身有问题）' % e.code)
+        except urllib.error.URLError as e:
+            last = str(getattr(e, 'reason', e))
+        except json.JSONDecodeError:
+            raise WereadError('返回内容不是合法 JSON（可能被网络中间层拦截了）')
+        except Exception as e:
+            last = str(e)
+
+        if attempt < tries:
+            time.sleep(min(8.0, (2 ** attempt) * 0.8 + random.random() * 0.4))
+
+    raise WereadError('连续 %d 次请求都失败了：%s' % (tries + 1, last))
+
+
+# --------------------------------------------------------------------------
+# AI 大纲（书里每章的总结性要点，需要登录态）
+# --------------------------------------------------------------------------
+API_OUTLINE_CHECK = 'https://weread.qq.com/web/book/outline/check'
+API_OUTLINE_INNER = 'https://weread.qq.com/web/book/outline/inner'
+
+
+def fetch_outline_chapters(book_id, cookie='', timeout=None):
+    """章节结构 + 每章有没有 AI 要点。
+
+    实测（2026-10-02）：`POST /web/book/outline/check` **不带 Cookie 也返回 200**，
+    内容是 chapterInfos 数组，每项形如：
+        {"text": "第1章 …", "chapterUid": 4, "level": 1,
+         "hasKeyPoint": 1, "version": 30012}
+    `hasKeyPoint == 1` 表示这一章有 AI 大纲（-1 表示没有）。
+
+    另外实测：**不是每本书都有 AI 大纲** ——《活着》13 章无一章有要点，
+    《短线交易秘诀》则有多章。所以「有没有」这件事本身也得靠这个接口问。
+    """
+    data = post_json(API_OUTLINE_CHECK, {'bookId': str(book_id)},
+                     cookie=cookie, timeout=timeout)
+    return data.get('chapterInfos') or []
+
+
+def fetch_outline_content(book_id, chapter_uids, cookie='', timeout=None):
+    """取指定章节的 AI 大纲正文（这是需要登录的那一步）。
+
+    实测要点：
+      · 必须 **POST**（GET 一律 404）
+      · 参数必须是 `{"bookId": "...", "chapterUids": [4]}` —— chapterUids 是**数组**
+      · 不带登录态会返回 HTTP 403
+    """
+    uids = [int(u) for u in (chapter_uids or [])]
+    if not uids:
+        return {}
+    if not cookie:
+        raise WereadError('取 AI 大纲需要登录态：请到「设置 → 微信读书登录」填入 Cookie')
+    return post_json(API_OUTLINE_INNER,
+                     {'bookId': str(book_id), 'chapterUids': uids},
+                     cookie=cookie, timeout=timeout)
+
+
+_OUTLINE_TEXT_KEYS = ('keyPoint', 'keyPoints', 'items', 'itemArray',
+                      'content', 'text', 'outline', 'points', 'summary')
+
+
+def outline_parse(data):
+    """把 outline/inner 的返回宽松解析成 {chapterUid: [文本, …]}。
+
+    官方没有公开返回结构，所以这里不写死字段名 —— 递归找出所有
+    「挂在某个 chapterUid 下、看起来像正文的字符串」。
+    认不出来时返回空 dict（界面会显示「该章暂无内容」），不会抛异常。
+    """
+    out = {}
+
+    def add(uid, s):
+        if isinstance(s, str) and s.strip():
+            out.setdefault(uid, []).append(s.strip())
+
+    def walk(node, cur_uid=None):
+        if isinstance(node, dict):
+            uid = node.get('chapterUid')
+            if uid is None:
+                uid = node.get('chapter_uid')
+            if uid is None:
+                uid = cur_uid
+            for k in _OUTLINE_TEXT_KEYS:
+                v = node.get(k)
+                if isinstance(v, str):
+                    add(uid, v)
+                elif isinstance(v, list):
+                    for x in v:
+                        if isinstance(x, str):
+                            add(uid, x)
+                        else:
+                            walk(x, uid)
+            for k, v in node.items():
+                if k in _OUTLINE_TEXT_KEYS:
+                    continue
+                walk(v, uid)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x, cur_uid)
+
+    walk(data)
+    return {k: v for k, v in out.items() if v}
+
+
 def search_books(keyword, timeout=None):
     """按书名搜索，返回候选列表。
 
@@ -214,8 +346,29 @@ def search_books(keyword, timeout=None):
             'intro': info.get('intro') or '',
             'finished': info.get('finished'),
             'price': info.get('price'),
+            # 官方书籍页链接，形如 https://weread.qq.com/book-detail?type=1&v=<infoId>
+            # 坑：URL 里的 v 是 infoId，和 bookId 不是一回事 —— 用 bookId 拼
+            # bookDetail/<bookId> 实测返回 404，所以只能原样保存这个字段。
+            'deepLink': info.get('deepLink') or '',
         })
     return out
+
+
+def book_url(book):
+    """返回这本书在微信读书网页版的地址（供「在微信读书打开」用）。
+
+    优先 deepLink（接口直给、实测三本书都直接 200）；
+    万一没有，退回按书名搜索页 —— 一定打得开，总比 404 强。
+    """
+    b = book or {}
+    dl = (b.get('deepLink') or '').strip()
+    if dl.startswith('http'):
+        return dl
+    title = (b.get('title') or '').strip()
+    if title:
+        return ('https://weread.qq.com/web/search/books?keyword='
+                + urllib.parse.quote(title))
+    return ''
 
 
 def rating_percent(book):

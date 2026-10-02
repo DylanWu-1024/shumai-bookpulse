@@ -67,7 +67,7 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 同名书一眼就能看出哪本更值得读，不用点进去猜。
 </div>
 
-<h2>二、六个页面各能干什么</h2>
+<h2>二、七个页面各能干什么</h2>
 <table>
 <tr><th>页面</th><th>用途</th></tr>
 <tr><td><b>搜索下载</b></td><td>搜书 → 抓热门划线 → 预览 → 导出。可按章节看，也能一键让 AI 整理成笔记。</td></tr>
@@ -75,7 +75,8 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 <tr><td><b>本地书库</b></td><td>抓过的书自动存进来，可以离线秒开（不联网）、看热度变化、加入关注。</td></tr>
 <tr><td><b>洞察台</b></td><td>跨书检索 + 主题聚合 + 关注推送，全部读本地数据，不发一次网络请求。</td></tr>
 <tr><td><b>导出记录</b></td><td>浏览导出过的文件、双击打开、删除（走回收站，可还原）。</td></tr>
-<tr><td><b>设置</b></td><td>外观、语言、导出规则、AI 助手、飞书推送。</td></tr>
+<tr><td><b>AI 大纲</b></td><td>每本书的<b>章节 AI 要点</b>，单独一页浏览、复制、导出。这一项需要先在设置里填一次 Cookie。</td></tr>
+<tr><td><b>设置</b></td><td>外观、语言、导出规则、AI 助手、<b>微信读书登录</b>、飞书推送。</td></tr>
 </table>
 
 <h2>三、进阶玩法</h2>
@@ -94,6 +95,9 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 <div class="mini"><b>🎯 专注模式</b><span>按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> 一键隐藏侧栏和顶栏，屏幕只剩正文。</span></div>
 <div class="mini"><b>⚡ 全文索引</b><span>书库用 FTS5 建全文索引，几百本书里搜一个词也是毫秒级。</span></div>
 <div class="mini"><b>🖱 右键快捷操作</b><span>在结果表格里右键 → 复制这一句 / 复制本章 / 复制整本；双击任意一行直接复制那句话。</span></div>
+<div class="mini"><b>📚 AI 大纲</b><span>微信读书给不少书生成了「每章要点」。侧栏点「AI 大纲」→ 选书 → 获取，就能看到每一章的要点，可复制可导出。需要先在设置里填一次 Cookie（原因见常见问题）。</span></div>
+<div class="mini"><b>📊 排序切换</b><span>结果那一行的「排序」可以选<b>按热度</b>或<b>按章节</b>，切了表格立刻重排，不用另开窗口。导出的顺序也跟着走。</span></div>
+<div class="mini"><b>📖 跳到微信读书</b><span>抓完一本书，点「在微信读书打开」就用浏览器打开它的官方页面 —— 浏览器的登录状态还在，直接接着读。</span></div>
 </div>
 
 <h3>导出格式怎么选</h3>
@@ -144,6 +148,20 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 <b>Windows 提示「已保护你的电脑」/「未知发布者」怎么办？</b><br>
 这是所有个人开发的小工具都会遇到的提示（因为没有买代码签名证书）。<br>
 点 <b>更多信息 → 仍要运行</b> 即可。
+</div>
+
+<div class="warn">
+<b>「AI 大纲」为什么要填 Cookie？</b><br>
+微信读书的 AI 大纲<b>正文接口必须带登录态</b>才会返回（不带会直接 403）。
+所以设置里有一项「微信读书登录」：把浏览器的 Cookie 粘进去即可。
+<b>只有这一项功能会带上它</b> —— 抓热门划线始终不带 Cookie，Cookie 也只存在你自己电脑上。<br><br>
+<b>怎么拿 Cookie：</b><br>
+1. 用浏览器打开微信读书并登录 → 按 <kbd>F12</kbd><br>
+2. 切到 <b>Application / 应用程序</b> → 左侧 <b>Cookies</b> → 选 <b>https://weread.qq.com</b><br>
+3. 把 <code>wr_vid</code>、<code>wr_skey</code> 等条目按 <code>名字=值; 名字=值</code> 的格式拼成一行，
+   粘到 <b>设置 → 微信读书登录</b> 里，点「测试连接」验证<br><br>
+还有一点要有预期：<b>不是每本书都有 AI 大纲</b>。《活着》整本 13 章一章都没有；
+《短线交易秘诀》125 章里有 122 章带要点 —— 程序会直接告诉你这本书有没有。
 </div>
 
 <h3>关于风控，我要说清楚</h3>

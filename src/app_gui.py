@@ -18,6 +18,7 @@
 import os
 import sys
 import time
+import random
 import ctypes
 import datetime
 from ctypes import wintypes
@@ -121,7 +122,8 @@ def render_pdf(result, with_people=True, style=None):
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer, QSize, QRectF, QPointF
 from PySide6.QtGui import (QDesktopServices, QFont, QIcon, QKeySequence, QShortcut,
-                           QPainter, QColor, QPixmap, QPen, QPainterPath)
+                           QPainter, QColor, QPixmap, QPen, QPainterPath,
+                           QLinearGradient)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
@@ -651,6 +653,19 @@ class SearchPage(QWidget):
         fill_formats(self.cb_fmt, settings.get('def_format'))
         self.cb_fmt.setMinimumWidth(150)
         tools.addWidget(self.cb_fmt)
+
+        # 排序方式 —— 直接作用在当前表格上，不另开窗口
+        tools.addWidget(_tag(T('search.sort')))
+        self.cb_sort = QComboBox()
+        self.cb_sort.addItem(T('sort.hot'), 'hot')
+        self.cb_sort.addItem(T('sort.chapter'), 'chapter')
+        _si = self.cb_sort.findData(settings.get('sort_mode'))
+        if _si >= 0:
+            self.cb_sort.setCurrentIndex(_si)
+        self.cb_sort.setFixedWidth(126)
+        self.cb_sort.setToolTip(T('sort.tip'))
+        self.cb_sort.currentIndexChanged.connect(self.on_sort_changed)
+        tools.addWidget(self.cb_sort)
         tools.addStretch(1)
 
         # 「打开导出文件夹」从界面左下角搬到这里 —— 它和导出是同一个动作链上的
@@ -663,6 +678,15 @@ class SearchPage(QWidget):
 
         acts = QHBoxLayout()
         acts.setSpacing(8)
+
+        # 去微信读书看这本书：用系统默认浏览器打开官方书籍页。
+        # 登录态完全由浏览器自己维持 —— 程序不读 Cookie、不携带任何凭证。
+        self.btn_weread = QPushButton('\U0001F4D6  ' + T('search.open_in_weread'))
+        self.btn_weread.setProperty('flat', True)
+        self.btn_weread.setEnabled(False)
+        self.btn_weread.clicked.connect(self.open_in_weread)
+        acts.addWidget(self.btn_weread)
+
         self.btn_chapter = QPushButton(T('chapter.btn'))
         self.btn_chapter.setProperty('flat', True)
         self.btn_chapter.setEnabled(False)
@@ -879,13 +903,32 @@ class SearchPage(QWidget):
         self.lb_metrics.setVisible(bool(m))
         self.lb_info.setToolTip(book_tooltip(r['book']))
         self.set_cover((r['book'] or {}).get('bookId') or '')
-        self._fill_table(r['items'][:1000])
+        self.refresh_table()
         self.btn_export.setEnabled(True)
+        self.btn_weread.setEnabled(True)
         self.btn_chapter.setEnabled(True)
         self.btn_ai.setEnabled(True)
         self.btn_queue.setEnabled(True)
         self.btn_copy.setEnabled(True)
         self.btn_map.setEnabled(True)
+
+    def open_in_weread(self):
+        """在系统默认浏览器里打开这本书的微信读书页面。
+
+        登录态由浏览器自己维持 —— 你在浏览器里登录过，打开就是登录状态。
+        程序这一侧不发任何带身份的请求，也不读取浏览器的 Cookie。
+        """
+        if not self.result:
+            return
+        url = core.book_url(self.result.get('book') or {})
+        if not url:
+            self.win.toast(T('toast.no_link'), kind='warn')
+            return
+        try:
+            QDesktopServices.openUrl(QUrl(url))
+            self.win.toast(T('toast.weread_opened'), kind='ok')
+        except Exception as e:
+            QMessageBox.warning(self, T('search.open_in_weread'), str(e))
 
     def show_chapters(self):
         if self.result:
@@ -999,6 +1042,49 @@ class SearchPage(QWidget):
             self.table.setItem(i, 3, _cell(core.num_fmt(it.get('totalCount')), center=True))
         self.table.setUpdatesEnabled(True)
 
+    # ---------------- 排序（表格原地切换，不弹窗）----------------
+    def _sorted_items(self, items):
+        """按当前排序方式重排，返回新列表（不动原始数据）。
+
+        按热度：划线人数从多到少。接口默认就是这个顺序，这里显式再排一次，
+                避免上游顺序变化后行为不一致。
+        按章节：按「接口给出的章节次序」分组，章内仍按热度从高到低。
+
+        为什么不用 chapterUid 数值排序：uid 只是章节标识，不保证递增就等于
+        阅读顺序。chapters 是按接口返回顺序插入的保序 dict，用它最靠谱。
+        """
+        out = list(items)
+        mode = self.cb_sort.currentData() if hasattr(self, 'cb_sort') else 'hot'
+        if mode == 'chapter':
+            ch_order = {}
+            try:
+                for i, uid in enumerate((self.result or {}).get('chapters') or {}):
+                    ch_order[uid] = i
+            except Exception:
+                ch_order = {}
+            if not ch_order:      # 兜底：拿不到章节表时退化为按 uid 排序
+                for i, uid in enumerate(sorted({it.get('chapterUid') or 0 for it in out})):
+                    ch_order[uid] = i
+            last = len(ch_order) + 1
+            out.sort(key=lambda it: (ch_order.get(it.get('chapterUid'), last),
+                                     -int(it.get('totalCount') or 0)))
+        else:
+            out.sort(key=lambda it: -int(it.get('totalCount') or 0))
+        return out
+
+    def on_sort_changed(self):
+        try:
+            settings.set_value('sort_mode', self.cb_sort.currentData())
+        except Exception:
+            pass
+        self.refresh_table()
+
+    def refresh_table(self):
+        """按当前排序方式重填表格（切排序、抓取完成都走这里）。"""
+        if not self.result:
+            return
+        self._fill_table(self._sorted_items(self.result['items'])[:1000])
+
     # ---------------- 导出 ----------------
     def do_export(self):
         if not self.result:
@@ -1006,7 +1092,8 @@ class SearchPage(QWidget):
         fmt = self.cb_fmt.currentData()
         n = self._top_value()
         base = dict(self.result)
-        items = list(base['items'])
+        # 导出跟随当前排序 —— 所见即所得，切到「按章节」导出的就是章节顺序
+        items = self._sorted_items(base['items'])
         base['items'] = items if not n else items[:n]
         try:
             paths, kept = export_result(base, fmt)
@@ -1904,7 +1991,13 @@ class AiDialog(QDialog):
         self.book_title = title
 
         self.setWindowTitle(T('ai.title') + ((' · ' + title) if title else ''))
-        self.resize(980, 720)
+        # 多了「提示词」可编辑框，高度要留够；同时按屏幕可用高度收敛，
+        # 免得小屏笔记本上对话框顶出屏幕。
+        try:
+            scr = QApplication.primaryScreen().availableGeometry()
+            self.resize(min(1000, scr.width() - 80), min(880, scr.height() - 90))
+        except Exception:
+            self.resize(1000, 840)
         self._build()
         self._sync_prompt_preview()
 
@@ -1942,12 +2035,35 @@ class AiDialog(QDialog):
         tpl_row.addWidget(self.lb_meta)
         root.addLayout(tpl_row)
 
-        # 送给模型的内容（折叠）
+        # ---- 提示词：可自由编辑 ----
+        # 发给 AI 的内容 = 这里写的话 + 自动附上的划线正文。
+        # 就算不写 {content} 占位符也没关系，ai.build_prompt 会自动把正文补在末尾。
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        prow.addWidget(_tag(T('ai.prompt_edit')))
+        prow.addStretch(1)
+        lb_fill = QLabel(T('ai.tpl_fill'))
+        lb_fill.setObjectName('Hint')
+        prow.addWidget(lb_fill)
+        root.addLayout(prow)
+
+        self.ed_prompt = QPlainTextEdit()
+        self.ed_prompt.setObjectName('PromptBox')
+        self.ed_prompt.setFixedHeight(102)
+        self.ed_prompt.setPlaceholderText(T('ai.prompt_ph'))
+        self._ptimer = QTimer(self)
+        self._ptimer.setSingleShot(True)
+        self._ptimer.timeout.connect(self._sync_prompt_preview)
+        self.ed_prompt.textChanged.connect(lambda: self._ptimer.start(260))
+        self.ed_prompt.setPlainText(self._current_template_text())
+        root.addWidget(self.ed_prompt)
+
+        # 送给模型的内容（只读预览 —— 让你看清实际发出去的是什么）
         self.lb_sent = _tag(T('ai.send_to'))
         root.addWidget(self.lb_sent)
         self.ed_sent = QPlainTextEdit()
         self.ed_sent.setReadOnly(True)
-        self.ed_sent.setFixedHeight(104)
+        self.ed_sent.setFixedHeight(94)
         self.ed_sent.setObjectName('SendBox')
         root.addWidget(self.ed_sent)
 
@@ -2015,20 +2131,45 @@ class AiDialog(QDialog):
 
     # ------------------------------------------------------------------ 动作
     def on_template(self, key):
+        """点模板 = 把模板原文填进提示词框，之后你随便改。"""
         self.template = key
+        self.free_prompt = ''
+        if hasattr(self, 'ed_prompt'):
+            self.ed_prompt.setPlainText(self._current_template_text())
         self._sync_prompt_preview()
 
     def _custom_prompt(self, key):
         return (settings.get('ai_prompt_%s' % key) or '').strip()
 
-    def _sync_prompt_preview(self):
-        """把真正要发出去的内容显示出来 —— 不做黑盒。"""
+    def _current_template_text(self):
+        """提示词框的初始文本：优先用设置里改过的，否则用内置模板原文。"""
+        if self.free_prompt:
+            return self.free_prompt
         try:
-            if self.free_prompt:       # 纯文本模式：整段 prompt 已经拼好了
-                self.sent_prompt = self.free_prompt
-                self.ed_sent.setPlainText(self.free_prompt)
+            return (self._custom_prompt(self.template)
+                    or AIm.BUILTIN_PROMPTS[self.template]['text'])
+        except Exception:
+            return ''
+
+    def _sync_prompt_preview(self):
+        """把真正要发出去的内容显示出来 —— 不做黑盒。
+
+        组装规则：**提示词框里写的内容** + 自动附上的划线正文。
+        你在框里怎么写，AI 就收到什么；没写 {content} 也没关系，
+        ai.build_prompt 会把划线正文补在末尾。
+        """
+        try:
+            if not hasattr(self, 'ed_prompt'):
                 return
-            tpl = self._custom_prompt(self.template) or self.template
+            tpl = self.ed_prompt.toPlainText().strip()
+            if self.free_prompt:
+                # 纯文本模式：传进来的整段内容已经拼好（含划线），直接发，不再套模板
+                text = tpl or self.free_prompt
+                self.sent_prompt = text
+                self.ed_sent.setPlainText(text)
+                return
+            if not tpl:
+                tpl = AIm.BUILTIN_PROMPTS[self.template]['text']
             if self.results:
                 text = AIm.build_prompt(tpl, results=self.results,
                                         max_items=int(settings.get('ai_max_items')))
@@ -2968,6 +3109,386 @@ class InsightPage(QWidget):
 
 
 # ==========================================================================
+# 页面 4.6：AI 大纲（每章的 AI 要点，需要登录态）
+# ==========================================================================
+class OutlineWorker(QThread):
+    """取一本书的 AI 大纲：先问结构，再分批取正文。
+
+    两个接口（2026-10-02 实测）：
+      POST /web/book/outline/check  → 章节结构 + 每章有没有要点（**免登录**）
+      POST /web/book/outline/inner  → 要点正文（**必须登录态**，不带 Cookie 返回 403）
+
+    为什么分批取正文：一本可能有上百章带要点（实测《短线交易秘诀》122 章），
+    一次全塞进请求体不合适，也更容易触发风控。每批 12 章、批间随机停顿。
+    单批失败不中断整体 —— 能拿到多少算多少，最后把最后一次错误一起报上来。
+    """
+    stage = Signal(str)
+    progress = Signal(int, int)
+    done = Signal(dict, list, str)      # {uid: [文本]}, 章节列表, 最后一次错误
+    fail = Signal(str)
+
+    BATCH = 12
+
+    def __init__(self, book_id, cookie, parent=None):
+        super().__init__(parent)
+        self.book_id = str(book_id)
+        self.cookie = cookie or ''
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        try:
+            self.stage.emit('check')
+            chapters = core.fetch_outline_chapters(self.book_id, cookie=self.cookie)
+            uids = [int(c.get('chapterUid')) for c in chapters
+                    if c.get('chapterUid') is not None and c.get('hasKeyPoint') == 1]
+
+            text_map, last_err, total = {}, '', len(uids)
+            for i in range(0, total, self.BATCH):
+                if self._stop:
+                    break
+                chunk = uids[i:i + self.BATCH]
+                try:
+                    raw = core.fetch_outline_content(self.book_id, chunk,
+                                                     cookie=self.cookie, retries=1)
+                    for k, v in (core.outline_parse(raw) or {}).items():
+                        try:
+                            text_map[int(k)] = v
+                        except (TypeError, ValueError):
+                            pass
+                except Exception as e:
+                    last_err = str(e)
+                self.progress.emit(min(i + len(chunk), total), total)
+                if i + self.BATCH < total and not self._stop:
+                    time.sleep(random.uniform(0.6, 1.4))
+
+            self.done.emit(text_map, chapters, last_err)
+        except Exception as e:
+            self.fail.emit(str(e))
+
+
+class OutlinePage(QWidget):
+    """AI 大纲 —— 书里每一章的总结性要点，单独一页查看/复制/导出。"""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.worker = None
+        self.chapters = []
+        self.by_uid = {}
+        self.book_title = ''
+        self._build()
+
+    # ------------------------------------------------------------------ 构建
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(26, 20, 26, 18)
+        root.setSpacing(12)
+        root.addLayout(page_header(T('outline.title'), T('outline.desc')))
+
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        bar.addWidget(_tag(T('outline.pick')))
+        self.cb_book = QComboBox()
+        self.cb_book.setMinimumWidth(300)
+        bar.addWidget(self.cb_book)
+        self.btn_fetch = QPushButton(T('outline.fetch'))
+        self.btn_fetch.setCursor(Qt.PointingHandCursor)
+        self.btn_fetch.clicked.connect(self.do_fetch)
+        bar.addWidget(self.btn_fetch)
+        self.btn_stop = QPushButton(T('ai.stop'))
+        self.btn_stop.setProperty('danger', True)
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self.stop_fetch)
+        bar.addWidget(self.btn_stop)
+        bar.addStretch(1)
+        self.lb_state = QLabel('')
+        self.lb_state.setObjectName('Hint')
+        bar.addWidget(self.lb_state)
+        root.addLayout(bar)
+
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+
+        lcard = W.Card()
+        lv = card_layout(lcard, margins=(12, 12, 12, 12), spacing=8)
+        lv.addWidget(_tag(T('outline.chapters')))
+        self.list = QListWidget()
+        self.list.currentRowChanged.connect(self.on_pick)
+        lv.addWidget(self.list, 1)
+        split.addWidget(lcard)
+
+        rcard = W.Card()
+        rv = card_layout(rcard, margins=(14, 12, 14, 12), spacing=8)
+        rh = QHBoxLayout()
+        rh.setSpacing(8)
+        rh.addWidget(_tag(T('outline.content')))
+        rh.addStretch(1)
+        self.btn_copy = QPushButton(T('outline.copy'))
+        self.btn_copy.setProperty('flat', True)
+        self.btn_copy.setEnabled(False)
+        self.btn_copy.clicked.connect(self.copy_chapter)
+        rh.addWidget(self.btn_copy)
+        self.btn_copy_all = QPushButton(T('outline.copy_all'))
+        self.btn_copy_all.setProperty('flat', True)
+        self.btn_copy_all.setEnabled(False)
+        self.btn_copy_all.clicked.connect(self.copy_all)
+        rh.addWidget(self.btn_copy_all)
+        self.btn_export = QPushButton(T('outline.export'))
+        self.btn_export.setProperty('ghost', True)
+        self.btn_export.setEnabled(False)
+        self.btn_export.clicked.connect(self.do_export)
+        rh.addWidget(self.btn_export)
+        rv.addLayout(rh)
+
+        self.ed = QPlainTextEdit()
+        self.ed.setReadOnly(True)
+        self.ed.setObjectName('SendBox')
+        self.ed.setPlaceholderText(T('outline.pick_chapter'))
+        rv.addWidget(self.ed, 1)
+        split.addWidget(rcard)
+        split.setSizes([320, 740])
+        root.addWidget(split, 1)
+
+        self.empty = W.EmptyState(T('outline.empty_book'), T('outline.empty_book_desc'))
+        root.addWidget(self.empty)
+        self.empty.hide()
+
+    # ------------------------------------------------------------------ 数据
+    def refresh(self):
+        """刷新书籍下拉（数据来自本地书库，不额外发请求）。"""
+        try:
+            cur = self.cb_book.currentData()
+            self.cb_book.clear()
+            books = self.win.kb.books() or []
+            for b in books:
+                self.cb_book.addItem('《%s》  %s' % (b.get('title') or '', b.get('author') or ''),
+                                     b.get('book_id'))
+            if cur:
+                i = self.cb_book.findData(cur)
+                if i >= 0:
+                    self.cb_book.setCurrentIndex(i)
+            self.btn_fetch.setEnabled(bool(books))
+            if not books:
+                self.lb_state.setText('')
+        except Exception as e:
+            print('[OutlinePage] refresh error:', e, file=sys.stderr)
+
+    def _cookie(self):
+        return (settings.get('weread_cookie') or '').strip()
+
+    # ------------------------------------------------------------------ 抓取
+    def do_fetch(self):
+        if self.worker and self.worker.isRunning():
+            return
+        if not self._cookie():
+            self.win.toast(T('outline.need_cookie'), kind='warn', hold=4600)
+            return
+        bid = self.cb_book.currentData()
+        if not bid:
+            return
+
+        self.book_title = (self.cb_book.currentText() or '').strip('《》 ')
+        self.btn_fetch.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.lb_state.setText(T('outline.loading'))
+        self.list.clear()
+        self.ed.setPlainText('')
+        self.chapters, self.by_uid = [], {}
+        self.empty.hide()
+
+        self.worker = OutlineWorker(str(bid), self._cookie(), self)
+        self.worker.stage.connect(self._on_stage)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.done.connect(self._on_done)
+        self.worker.fail.connect(self._on_fail)
+        self.worker.start()
+
+    def _on_stage(self, what):
+        if what == 'check':
+            self.lb_state.setText(T('outline.loading'))
+
+    def _on_progress(self, done, total):
+        self.lb_state.setText(T('outline.progress', done=done, total=total))
+
+    def stop_fetch(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.lb_state.setText(T('ai.stop'))
+
+    def _on_fail(self, msg):
+        self.btn_fetch.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.lb_state.setText('')
+        QMessageBox.warning(self, T('outline.title'), msg)
+
+    def _on_done(self, text_map, chapters, last_err):
+        self.btn_fetch.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.by_uid = text_map or {}
+        self.chapters = chapters or []
+
+        n_has = sum(1 for c in self.chapters if c.get('hasKeyPoint') == 1)
+        n_got = len(self.by_uid)
+        chars = sum(len('\n'.join(v)) for v in self.by_uid.values())
+
+        self.list.clear()
+        for c in self.chapters:
+            uid = c.get('chapterUid')
+            mark = '\u25CF ' if c.get('hasKeyPoint') == 1 else '   '
+            lvl = c.get('level') or 1
+            pad = '    ' * max(0, min(2, int(lvl) - 1))
+            it = QListWidgetItem('%s%s%s' % (mark, pad, c.get('text') or ''))
+            it.setData(Qt.UserRole, uid)
+            if c.get('hasKeyPoint') != 1:
+                it.setForeground(QColor('#A0A0B8'))
+            self.list.addItem(it)
+
+        if n_has == 0:
+            self.empty.show()
+            self.lb_state.setText('')
+            self.btn_copy_all.setEnabled(False)
+            self.btn_export.setEnabled(False)
+            return
+
+        self.empty.hide()
+        self.lb_state.setText(T('outline.summary', n=n_has, chars=core.num_fmt(chars)))
+        self.btn_copy_all.setEnabled(bool(self.by_uid))
+        self.btn_export.setEnabled(bool(self.by_uid))
+        if last_err and n_got < n_has:
+            self.win.toast(T('set.cookie_fail', msg=last_err[:70]), kind='warn', hold=5200)
+
+    # ------------------------------------------------------------------ 交互
+    def on_pick(self, row):
+        if row < 0:
+            return
+        it = self.list.item(row)
+        if it is None:
+            return
+        uid = it.data(Qt.UserRole)
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            uid = None
+        parts = self.by_uid.get(uid) or []
+        name = (it.text() or '').strip('\u25CF ')
+        if parts:
+            self.ed.setPlainText('【%s】\n\n%s' % (name, '\n\n'.join(parts)))
+        else:
+            self.ed.setPlainText('【%s】\n\n%s' % (name, T('outline.none')))
+        self.btn_copy.setEnabled(bool(parts))
+
+    def _chapter_blocks(self):
+        """把已取到的大纲拼成「章名 + 要点」的文本块列表。"""
+        name_of = {}
+        for c in self.chapters:
+            name_of[c.get('chapterUid')] = c.get('text') or ''
+        blocks = []
+        for c in self.chapters:
+            uid = c.get('chapterUid')
+            if c.get('hasKeyPoint') != 1:
+                continue
+            parts = self.by_uid.get(uid)
+            if not parts:
+                continue
+            try:
+                uid_i = int(uid)
+            except (TypeError, ValueError):
+                uid_i = uid
+            parts = self.by_uid.get(uid_i) or parts
+            blocks.append('## %s\n\n%s' % (name_of.get(uid, ''), '\n\n'.join(parts)))
+        return blocks
+
+    def _full_text(self):
+        head = '# 《%s》· AI 大纲\n' % self.book_title
+        return head + '\n\n'.join(self._chapter_blocks())
+
+    def copy_chapter(self):
+        t = self.ed.toPlainText()
+        if not t.strip():
+            return
+        QApplication.clipboard().setText(t)
+        self.win.toast(T('outline.copied'), kind='ok')
+
+    def copy_all(self):
+        t = self._full_text()
+        if not t.strip():
+            return
+        QApplication.clipboard().setText(t)
+        self.win.toast(T('outline.copied'), kind='ok')
+
+    # ------------------------------------------------------------------ 导出
+    def _render_text(self, ext):
+        """把大纲渲染成 md / txt / html —— 三种覆盖了常见去向。"""
+        title = self.book_title
+        blocks = self._chapter_blocks()
+
+        if ext == '.html':
+            secs = []
+            for b in blocks:
+                lines = b.split('\n')
+                name = lines[0].replace('## ', '').strip()
+                body = [l for l in lines[1:] if l.strip()]
+                secs.append('<section><h2>%s</h2>%s</section>'
+                            % (core.esc(name),
+                               ''.join('<p>%s</p>' % core.esc(p) for p in body)))
+            return (
+                '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<title>%s · AI 大纲</title><style>'
+                'body{margin:0;background:#f4f6f8;font:16px/1.85 -apple-system,'
+                '"PingFang SC","Microsoft YaHei",sans-serif;color:#222}'
+                'header{background:linear-gradient(135deg,#6366F1,#7C3AED);'
+                'color:#fff;padding:32px 20px}h1{margin:0;font-size:22px}'
+                'main{max-width:760px;margin:24px auto;padding:0 16px}'
+                'section{background:#fff;border-radius:12px;padding:18px 20px;'
+                'margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.05)}'
+                'section h2{margin:0 0 10px;font-size:16px;color:#4C1D95}'
+                'section p{margin:6px 0;font-size:15.5px;line-height:1.9}'
+                '</style></head><body><header><h1>《%s》· AI 大纲</h1></header>'
+                '<main>%s</main></body></html>'
+                % (core.esc(title), core.esc(title), ''.join(secs)))
+
+        if ext == '.txt':
+            out = ['《%s》· AI 大纲' % title, '']
+            for b in blocks:
+                lines = b.split('\n')
+                out.append(lines[0].replace('## ', '').strip())
+                out.append('')
+                out.extend(l for l in lines[1:] if l.strip())
+                out.append('')
+            return '\n'.join(out)
+
+        return self._full_text()
+
+    def do_export(self):
+        """导出大纲：Markdown / 纯文本 / 网页，任选。"""
+        blocks = self._chapter_blocks()
+        if not blocks:
+            return
+        default = os.path.join(
+            export_dir(), '《%s》AI大纲-%s.md'
+            % (core.safe_filename(self.book_title), core.stamp()))
+        filt = ';;'.join(['Markdown (*.md)', '纯文本 (*.txt)',
+                          '网页 (*.html)', '所有文件 (*)'])
+        path, _ = QFileDialog.getSaveFileName(self, T('outline.export'), default, filt)
+        if not path:
+            return
+        ext = (os.path.splitext(path)[1] or '.md').lower()
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(self._render_text(ext))
+        except Exception as e:
+            QMessageBox.warning(self, T('outline.export'), str(e))
+            return
+        self.win.toast(T('outline.exported', name=os.path.basename(path)),
+                       kind='ok', hold=3600)
+        self.win.refresh_exports()
+
+
+# ==========================================================================
 # 页面 5：导出记录
 # ==========================================================================
 class ExportPage(QWidget):
@@ -3113,10 +3634,28 @@ class SettingsPage(QWidget):
         lb.setObjectName('Hint')
         return lb
 
-    def _row(self, label, widget, hint=''):
+    def _row(self, label, widget, hint='', max_w=None):
+        """一行设置：标签 + 控件（+ 说明）。
+
+        输入类控件不该占满整行 —— 宽度拉满会让整个设置页看起来又挤又空。
+        这里按控件类型给一个得体的宽度上限；用 `_wrap()` 包出来的组合控件
+        是 QWidget，不在此列，保持自适应。
+        """
         box = QVBoxLayout()
-        box.setSpacing(5)
+        box.setSpacing(6)
         box.addWidget(_tag(label))
+        if max_w is None:
+            if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                max_w = 132
+            elif isinstance(widget, QComboBox):
+                max_w = 300
+            elif isinstance(widget, QLineEdit):
+                max_w = 380
+        if max_w:
+            try:
+                widget.setMaximumWidth(int(max_w))
+            except Exception:
+                pass
         box.addWidget(widget)
         if hint:
             box.addWidget(self._hint(hint))
@@ -3145,7 +3684,7 @@ class SettingsPage(QWidget):
         col1.setSpacing(13)
 
         c_app = W.Card()
-        av = card_layout(c_app, margins=(16, 14, 16, 16), spacing=11)
+        av = card_layout(c_app, margins=(16, 15, 16, 17), spacing=12)
         av.addWidget(self._group('\U0001F3A8  ' + T('set.appearance')))
 
         av.addWidget(_tag(T('set.theme')))
@@ -3221,7 +3760,7 @@ class SettingsPage(QWidget):
         col1.addWidget(c_app)
 
         c_lang = W.Card()
-        lv = card_layout(c_lang, margins=(16, 14, 16, 16), spacing=10)
+        lv = card_layout(c_lang, margins=(16, 15, 16, 17), spacing=12)
         lv.addWidget(self._group('\U0001F310  ' + T('set.language')))
         lrow = QHBoxLayout()
         lrow.setSpacing(8)
@@ -3250,7 +3789,7 @@ class SettingsPage(QWidget):
                      ('Ctrl+G', T('ai.btn')),
                      ('Ctrl+E', T('search.export')),
                      ('Ctrl+R', T('set.sc_refresh')),
-                     ('Ctrl+1 … 6', T('set.sc_pages')),
+                     ('Ctrl+1 … 7', T('set.sc_pages')),
                      ('Ctrl+,', T('nav.settings'))]:
             row = QHBoxLayout()
             row.setSpacing(10)
@@ -3273,7 +3812,7 @@ class SettingsPage(QWidget):
         col2.setSpacing(13)
 
         c_beh = W.Card()
-        bv = card_layout(c_beh, margins=(16, 14, 16, 16), spacing=11)
+        bv = card_layout(c_beh, margins=(16, 15, 16, 17), spacing=12)
         bv.addWidget(self._group('\U0001F4E5  ' + T('set.behavior')))
 
         self.sp_count = QSpinBox()
@@ -3318,8 +3857,10 @@ class SettingsPage(QWidget):
             self.fmt_checks[k] = cb
             fmt_row.addWidget(cb)
         fmt_row.addStretch(1)
+        # 注意：这一行【不设】宽度上限 —— 复选框文字会被裁成 HTM / JSO，
+        # 让它按内容自适应。
         bv.addLayout(self._row(T('set.formats'), self._wrap(fmt_row),
-                               T('set.formats_hint')))
+                               T('set.formats_hint'), 0))
 
         # 导出目录（可自定义）—— 输入框与按钮分两行，避免行最小宽度超过列宽被截断
         self.ed_dir = QLineEdit()
@@ -3343,7 +3884,7 @@ class SettingsPage(QWidget):
         dir_box.addWidget(self.ed_dir)
         dir_box.addLayout(dir_btns)
         bv.addLayout(self._row(T('set.export_dir'), self._wrap(dir_box),
-                               T('set.dir_hint')))
+                               T('set.dir_hint'), 640))
 
         iv = QHBoxLayout()
         iv.setSpacing(6)
@@ -3362,12 +3903,13 @@ class SettingsPage(QWidget):
         iv.addWidget(self.sp_min)
         iv.addWidget(_tag('~'))
         iv.addWidget(self.sp_max)
-        bv.addLayout(self._row(T('set.interval'), self._wrap(iv), T('set.interval_hint')))
+        bv.addLayout(self._row(T('set.interval'), self._wrap(iv),
+                               T('set.interval_hint'), 300))
         col2.addWidget(c_beh)
 
         # ---------------- AI 助手（方向 2 / 3）----------------
         c_ai = W.Card()
-        aiv = card_layout(c_ai, margins=(16, 14, 16, 16), spacing=10)
+        aiv = card_layout(c_ai, margins=(16, 15, 16, 17), spacing=12)
         aiv.addWidget(self._group('\U0001F916  ' + T('set.ai')))
 
         self.cb_provider = QComboBox()
@@ -3429,7 +3971,7 @@ class SettingsPage(QWidget):
 
         # ---------------- 飞书推送（方向 6）----------------
         c_fs = W.Card()
-        fv = card_layout(c_fs, margins=(16, 14, 16, 16), spacing=10)
+        fv = card_layout(c_fs, margins=(16, 15, 16, 17), spacing=12)
         fv.addWidget(self._group('\U0001F514  ' + T('set.feishu')))
 
         self.ed_hook = QLineEdit()
@@ -3503,7 +4045,7 @@ class SettingsPage(QWidget):
 
         # ---------------- 导出模板 ----------------
         c_tpl = W.Card()
-        tv = card_layout(c_tpl, margins=(16, 14, 16, 16), spacing=10)
+        tv = card_layout(c_tpl, margins=(16, 15, 16, 17), spacing=12)
         tv.addWidget(self._group('\U0001F4D0  ' + T('set.template')))
 
         self.sp_font = QSpinBox()
@@ -3554,8 +4096,33 @@ class SettingsPage(QWidget):
         col2.addWidget(c_tpl)
 
         # ---------------- 网络 ----------------
+        # ---- 微信读书登录（只为 AI 大纲）----
+        c_wr = W.Card()
+        wv = card_layout(c_wr, margins=(16, 15, 16, 17), spacing=12)
+        wv.addWidget(self._group('\U0001F510  ' + T('set.weread')))
+        wv.addWidget(self._hint(T('set.cookie_hint')))
+        self.ed_cookie = QLineEdit()
+        self.ed_cookie.setText(settings.get('weread_cookie') or '')
+        self.ed_cookie.setPlaceholderText(T('set.cookie_ph'))
+        self.ed_cookie.textChanged.connect(self.on_cookie)
+        wv.addLayout(self._row(T('set.cookie'), self.ed_cookie))
+        wr_row = QHBoxLayout()
+        wr_row.setSpacing(8)
+        b_ct = QPushButton(T('set.cookie_test'))
+        b_ct.setProperty('ghost', True)
+        b_ct.setCursor(Qt.PointingHandCursor)
+        b_ct.clicked.connect(self.on_test_cookie)
+        wr_row.addWidget(b_ct)
+        wr_row.addStretch(1)
+        self.lb_cookie_state = QLabel('')
+        self.lb_cookie_state.setObjectName('Hint')
+        self.lb_cookie_state.setWordWrap(True)
+        wr_row.addWidget(self.lb_cookie_state, 1)
+        wv.addLayout(wr_row)
+        col2.addWidget(c_wr)
+
         c_net = W.Card()
-        nv2 = card_layout(c_net, margins=(16, 14, 16, 16), spacing=10)
+        nv2 = card_layout(c_net, margins=(16, 15, 16, 17), spacing=12)
         nv2.addWidget(self._group('\U0001F4E1  ' + T('set.net')))
 
         self.sp_timeout = QSpinBox()
@@ -3580,7 +4147,7 @@ class SettingsPage(QWidget):
         col2.addWidget(c_net)
 
         c_data = W.Card()
-        dv = card_layout(c_data, margins=(16, 14, 16, 16), spacing=10)
+        dv = card_layout(c_data, margins=(16, 15, 16, 17), spacing=12)
         dv.addWidget(self._group('\U0001F4BE  ' + T('set.data')))
         self.lb_stats = self._hint('')
         dv.addWidget(self.lb_stats)
@@ -3685,6 +4252,53 @@ class SettingsPage(QWidget):
         settings.set_value('net_retries', int(self.sp_retries.value()))
         settings.set_value('net_proxy', self.ed_proxy.text().strip())
         apply_net_settings()
+
+    # ---------------- 微信读书登录（只为 AI 大纲）----------------
+    def on_cookie(self, text):
+        if self._loading:
+            return
+        settings.set_value('weread_cookie', (text or '').strip())
+
+    def on_test_cookie(self):
+        """测一次：拿本地书库里的书试 outline/check + inner，确认登录态真的有效。
+
+        这一步很关键 —— 因为不同书的 AI 大纲覆盖差别很大（《活着》整本都没有），
+        所以要在书库里找一本「确实有要点」的来验证，才能说明 Cookie 是有效的。
+        """
+        ck = (self.ed_cookie.text() or '').strip()
+        if not ck:
+            self.lb_cookie_state.setText(T('set.cookie_fail', msg='Cookie 还是空的'))
+            return
+        self.lb_cookie_state.setText(T('outline.loading'))
+        QApplication.processEvents()
+        try:
+            books = self.win.kb.books() or []
+            if not books:
+                self.lb_cookie_state.setText(
+                    T('set.cookie_fail', msg='本地书库是空的，先抓一本书'))
+                return
+            for b in books[:3]:
+                chs = core.fetch_outline_chapters(b['book_id'], cookie=ck)
+                has = [c for c in chs if c.get('hasKeyPoint') == 1]
+                if not has:
+                    continue
+                raw = core.fetch_outline_content(b['book_id'],
+                                                 [has[0]['chapterUid']], cookie=ck)
+                got = core.outline_parse(raw)
+                self.lb_cookie_state.setText(
+                    T('set.cookie_ok', title=b['title'], n=len(has)))
+                if got:
+                    self.win.toast('登录态有效：已取到 %d 章内容' % len(got),
+                                   kind='ok', hold=3600)
+                else:
+                    self.win.toast('接口通了，但没解析出内容（返回结构可能变了）',
+                                   kind='warn', hold=4600)
+                return
+            self.lb_cookie_state.setText(
+                T('set.cookie_ok', title=books[0]['title'], n=0)
+                + '（这几本都没有 AI 大纲，换一本有要点的再试）')
+        except Exception as e:
+            self.lb_cookie_state.setText(T('set.cookie_fail', msg=str(e)[:70]))
 
     def on_titlebar(self, state):
         if self._loading:
@@ -3994,10 +4608,12 @@ class MainWindow(QMainWindow):
         self.page_batch = BatchPage(self)
         self.page_library = LibraryPage(self)
         self.page_insight = InsightPage(self)
+        self.page_outline = OutlinePage(self)
         self.page_export = ExportPage(self)
         self.page_settings = SettingsPage(self)
         for p in (self.page_search, self.page_batch, self.page_library,
-                  self.page_insight, self.page_export, self.page_settings):
+                  self.page_insight, self.page_outline, self.page_export,
+                  self.page_settings):
             self.stack.addWidget(p)
         rv.addWidget(self.stack, 1)
         lay.addWidget(right, 1)
@@ -4019,6 +4635,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence('Ctrl+3'), self, activated=lambda: self.switch_page(2))
         QShortcut(QKeySequence('Ctrl+4'), self, activated=lambda: self.switch_page(3))
         QShortcut(QKeySequence('Ctrl+5'), self, activated=lambda: self.switch_page(4))
+        QShortcut(QKeySequence('Ctrl+6'), self, activated=lambda: self.switch_page(5))
+        QShortcut(QKeySequence('Ctrl+7'), self, activated=lambda: self.switch_page(6))
         QShortcut(QKeySequence('Ctrl+,'), self, activated=lambda: self.switch_page(5))
         QShortcut(QKeySequence('Ctrl+G'), self, activated=self.do_ai_shortcut)
         QShortcut(QKeySequence('Ctrl+R'), self, activated=self.refresh_current)
@@ -4056,6 +4674,7 @@ class MainWindow(QMainWindow):
         self.nav_group.setExclusive(True)
         nav = [('\U0001F50D', 'nav.search'), ('\U0001F4DA', 'nav.batch'),
                ('\U0001F5C2', 'nav.library'), ('\U0001F4A1', 'nav.insight'),
+               ('\U0001F4D6', 'nav.outline'),
                ('\U0001F4C1', 'nav.exports'), ('\u2699', 'nav.settings')]
         for i, (icon, key) in enumerate(nav):
             b = QPushButton('%s\u3000%s' % (icon, T(key)))
@@ -4215,8 +4834,9 @@ class MainWindow(QMainWindow):
             ('go1', T('cmd.go_batch'), 'batch pi liang'),
             ('go2', T('cmd.go_library'), 'library shu ku'),
             ('go3', T('nav.insight'), 'insight dong cha cross book'),
-            ('go4', T('cmd.go_exports'), 'exports dao chu'),
-            ('go5', T('cmd.go_settings'), 'settings she zhi'),
+            ('go4', T('nav.outline'), 'outline ai da gang'),
+            ('go5', T('cmd.go_exports'), 'exports dao chu'),
+            ('go6', T('cmd.go_settings'), 'settings she zhi'),
             ('ai', T('ai.btn'), 'ai zheng li distill summarize'),
             ('dir', T('cmd.open_dir'), 'folder wen jian jia'),
             ('data', T('cmd.open_data'), 'data shu ju'),
@@ -4248,6 +4868,8 @@ class MainWindow(QMainWindow):
             self.switch_page(4)
         elif cid == 'go5':
             self.switch_page(5)
+        elif cid == 'go6':
+            self.switch_page(6)
         elif cid == 'ai':
             self.do_ai_shortcut()
         elif cid == 'dir':
@@ -4302,14 +4924,25 @@ class MainWindow(QMainWindow):
     def stagger_in(self, page=None):
         """切页后让卡片错落淡入（每个延后 45ms）。
 
-        注意：Qt 里一个控件只能挂一个 QGraphicsEffect，
-        所以动画结束必须把 effect 摘掉，否则会顶掉卡片本来的阴影。
+        注意：Qt 里一个控件只能挂一个 QGraphicsEffect（见 widgets.Card.
+        restore_shadow 的注释）—— 动画结束必须【恢复阴影】而不是简单置 None，
+        否则卡片的阴影会被这次动画永久顶掉。
         """
         if not settings.get('motion'):
             return
         try:
             page = page or self.stack.currentWidget()
             cards = page.findChildren(W.Card)[:8]
+
+            def _restore(c):
+                try:
+                    if hasattr(c, 'restore_shadow'):
+                        c.restore_shadow()
+                    else:
+                        c.setGraphicsEffect(None)
+                except Exception:
+                    pass
+
             for i, c in enumerate(cards):
                 eff = QGraphicsOpacityEffect(c)
                 eff.setOpacity(0.0)
@@ -4320,9 +4953,9 @@ class MainWindow(QMainWindow):
                 a.setEndValue(1.0)
                 a.setEasingCurve(QEasingCurve.OutCubic)
                 QTimer.singleShot(i * 45, a.start)
-                QTimer.singleShot(i * 45 + 240, lambda cc=c: cc.setGraphicsEffect(None))
-        except Exception:
-            pass
+                QTimer.singleShot(i * 45 + 250, lambda cc=c: _restore(cc))
+        except Exception as e:
+            print('[stagger_in] error:', e, file=sys.stderr)
 
     def nativeEvent(self, eventType, message):
         """无边框模式下自己处理 WM_NCHITTEST，把缩放/贴边还给系统。
@@ -4395,8 +5028,10 @@ class MainWindow(QMainWindow):
         elif idx == 3:
             self.page_insight.refresh()
         elif idx == 4:
-            self.page_export.refresh()
+            self.page_outline.refresh()
         elif idx == 5:
+            self.page_export.refresh()
+        elif idx == 6:
             self.page_settings.refresh_stats()
         self.toast('\u21bb %s' % T('chart.title'))
 
@@ -4420,7 +5055,7 @@ class MainWindow(QMainWindow):
         if btn and not btn.isChecked():
             btn.setChecked(True)
         titles = ['nav.search', 'nav.batch', 'nav.library', 'nav.insight',
-                  'nav.exports', 'nav.settings']
+                  'nav.outline', 'nav.exports', 'nav.settings']
         if 0 <= idx < len(titles):
             self.lb_top_title.setText(T(titles[idx]))
         self._update_side()
@@ -4430,8 +5065,10 @@ class MainWindow(QMainWindow):
         elif idx == 3:
             self.page_insight.refresh()
         elif idx == 4:
-            self.page_export.refresh()
+            self.page_outline.refresh()
         elif idx == 5:
+            self.page_export.refresh()
+        elif idx == 6:
             self.page_settings.refresh_stats()
 
     def refresh_exports(self):

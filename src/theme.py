@@ -322,6 +322,15 @@ QPlainTextEdit#Log {
     selection-background-color: %(PRIMARY)s;
 }
 
+/* 提示词框：这个是【可编辑】的，给它一点"能写"的视觉暗示，
+   并与下面只读的「实际发送内容」区分开 */
+QPlainTextEdit#PromptBox {
+    background: %(PRIMARY_SOFT)s; border: 1px solid %(border_hl)s;
+    border-radius: 10px; padding: 9px 12px; font-size: 12.5px;
+    line-height: 1.6; color: %(INK)s;
+}
+QPlainTextEdit#PromptBox:focus { border: 1px solid %(PRIMARY)s; }
+
 /* ------------------------------------------------------------ 滚动条 */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical {

@@ -53,3 +53,6 @@ tmp/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Windows 快捷方式（含本机绝对路径，不要提交）
+*.lnk
