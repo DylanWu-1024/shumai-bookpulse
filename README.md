@@ -97,7 +97,7 @@ Markdown · 纯文本 · **Word (.docx)** · **EPUB** · **PDF** · 网页 · �
 
 ```bash
 # 1. 克隆
-git clone https://github.com/652900956/shumai-bookpulse.git
+git clone https://github.com/DylanWu-1024/shumai-bookpulse.git
 cd shumai-bookpulse
 
 # 2. 创建虚拟环境并安装依赖（只有 PySide6 一个）
@@ -393,7 +393,7 @@ shumai-bookpulse/
 
 ## 📄 许可证
 
-[MIT License](LICENSE) © 2026 652900956
+[MIT License](LICENSE) © 2026 DylanWu
 
 ---
 

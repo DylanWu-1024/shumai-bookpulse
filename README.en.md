@@ -97,7 +97,7 @@ Grab `书脉.exe` (~45 MB) from the **[Releases](../../releases/latest)** page a
 
 ```bash
 # 1. Clone
-git clone https://github.com/652900956/shumai-bookpulse.git
+git clone https://github.com/DylanWu-1024/shumai-bookpulse.git
 cd shumai-bookpulse
 
 # 2. Create a virtual environment and install dependencies (PySide6 only)
@@ -393,7 +393,7 @@ A few project conventions (learned the hard way — written down so you don't re
 
 ## 📄 License
 
-[MIT License](LICENSE) © 2026 652900956
+[MIT License](LICENSE) © 2026 DylanWu
 
 ---
 
