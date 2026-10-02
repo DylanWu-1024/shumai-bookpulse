@@ -1,0 +1,13 @@
+# 书脉 BookPulse —— 运行依赖
+#
+# 整个项目只有这一个第三方依赖。
+# 抓取、导出（含 Word/EPUB/PDF）、本地书库、全文检索、图表、思维导图
+# 全部基于 Python 标准库 + PySide6 自带能力实现，没有引入其他库。
+
+PySide6>=6.5.0
+
+# 说明：
+#   · 命令行版（src/weread_hotmarks.py）只需要 Python 标准库，
+#     连 PySide6 都不需要，可以直接 python src/weread_hotmarks.py "活着"
+#   · 打包成 exe 额外需要（不在运行依赖里）：
+#         pip install pyinstaller

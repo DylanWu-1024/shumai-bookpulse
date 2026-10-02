@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>书脉 BookPulse · 使用说明</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#F6F7FC;color:#171635;
+font:16px/1.85 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+.hero{background:linear-gradient(140deg,#4F46E5 0%,#7C3AED 52%,#DB2777 100%);
+color:#fff;padding:52px 24px 44px}
+.wrap{max-width:820px;margin:0 auto;padding:0 24px}
+.hero .tag{display:inline-block;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+opacity:.85;border:1px solid rgba(255,255,255,.45);border-radius:99px;padding:3px 12px}
+.hero h1{margin:16px 0 10px;font-size:30px;font-weight:800;letter-spacing:-.01em}
+.hero p{margin:0;opacity:.92;font-size:15px}
+main{max-width:820px;margin:0 auto;padding:26px 24px 60px}
+h2{font-size:19px;margin:34px 0 12px;padding-left:12px;border-left:4px solid #7C3AED}
+h3{font-size:15.5px;margin:22px 0 8px;color:#3B3A7A}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:6px 0}
+.card{background:#fff;border-radius:14px;padding:16px 18px;margin:12px 0;
+box-shadow:0 2px 10px rgba(35,32,90,.06)}
+code{background:#EEEDFB;color:#5B21B6;border-radius:5px;padding:1px 6px;font-size:14px}
+kbd{background:#EEEDFB;border:1px solid #D9D7F0;border-radius:6px;padding:2px 8px;
+font-size:13px;color:#4C1D95;font-family:Consolas,monospace}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14.5px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #E9E8F4}
+th{color:#5B5A85;font-weight:600;font-size:13px}
+.warn{background:#FFF7ED;border-left:4px solid #F59E0B;border-radius:10px;padding:14px 16px;margin:14px 0}
+.ok{background:#ECFDF5;border-left:4px solid #10B981;border-radius:10px;padding:14px 16px;margin:14px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}
+.mini{background:#fff;border-radius:12px;padding:14px 15px;box-shadow:0 2px 8px rgba(35,32,90,.05)}
+.mini b{display:block;color:#4C1D95;font-size:14.5px;margin-bottom:4px}
+.mini span{font-size:13.5px;color:#5B5A85;line-height:1.7}
+footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">BookPulse · Windows</span>
+    <h1>书脉</h1>
+    <p>把微信读书里「大家划过的句子」变成你自己的知识 —— 抓取、沉淀、让 AI 帮你整理。</p>
+  </div>
+</header>
+
+<main>
+
+<h2>一、怎么开始（三步）</h2>
+<div class="card">
+<ol>
+  <li><b>双击 <code>书脉.exe</code></b> —— 不需要安装任何东西，不需要 Python。
+      <div style="font-size:13.5px;color:#8B8AAE;margin-top:4px">
+      （单文件版首次打开会先解压，可能要等 2~3 秒，属正常现象）</div></li>
+  <li>在「<b>搜索下载</b>」页输入书名 → 点搜索 → 在候选列表里挑一本 → 点「抓取选中这本书的热门划线」。</li>
+  <li>看结果 → 点「导出」，文件会出现在程序旁边的 <code>exports</code> 文件夹里。</li>
+</ol>
+</div>
+
+<div class="ok">
+<b>为什么候选列表里会显示评分？</b><br>
+每本书后面那串「神作 92.0% · 21.4万人评价 · 2537人在读」是微信读书公开的推荐数据 ——
+同名书一眼就能看出哪本更值得读，不用点进去猜。
+</div>
+
+<h2>二、六个页面各能干什么</h2>
+<table>
+<tr><th>页面</th><th>用途</th></tr>
+<tr><td><b>搜索下载</b></td><td>搜书 → 抓热门划线 → 预览 → 导出。可按章节看，也能一键让 AI 整理成笔记。</td></tr>
+<tr><td><b>批量队列</b></td><td>书名一行一个，排队抓取。默认每本之间随机停 2~4 秒，<b>这个间隔别调到 0</b>。</td></tr>
+<tr><td><b>本地书库</b></td><td>抓过的书自动存进来，可以离线秒开（不联网）、看热度变化、加入关注。</td></tr>
+<tr><td><b>洞察台</b></td><td>跨书检索 + 主题聚合 + 关注推送，全部读本地数据，不发一次网络请求。</td></tr>
+<tr><td><b>导出记录</b></td><td>浏览导出过的文件、双击打开、删除（走回收站，可还原）。</td></tr>
+<tr><td><b>设置</b></td><td>外观、语言、导出规则、AI 助手、飞书推送。</td></tr>
+</table>
+
+<h2>三、进阶玩法</h2>
+
+<div class="grid">
+<div class="mini"><b>🤖 一键 AI 整理</b><span>抓完书点「AI 整理」，选一个模板（精华提炼 / 主题对比 / 行动清单 / 关键词），AI 直接给你整理好的笔记。需要先在设置里填一个 API Key。</span></div>
+<div class="mini"><b>📊 按章节看</b><span>哪几章最戳人，一眼看热度条。展开还能看到同一段落里其他读者还在关注什么。</span></div>
+<div class="mini"><b>🔍 跨书检索</b><span>搜「复利」，列出你所有书里跟它有关的高热划线，按共鸣人数排序。</span></div>
+<div class="mini"><b>🧩 主题聚合</b><span>勾选 2~5 本同主题的书，让 AI 产出「这些书在同一个问题上各自怎么说」。</span></div>
+<div class="mini"><b>📈 热度趋势</b><span>同一本书抓两次以上，就能看到哪句话正在越来越多人划线（折线图）。</span></div>
+<div class="mini"><b>🔔 关注推送</b><span>把书加入关注，程序会自动检查新晋热门划线，还能推一条卡片到飞书群。</span></div>
+<div class="mini"><b>📋 一键复制</b><span>不想落文件时，点「复制」直接拿走 Markdown 或纯文本；双击表格里任意一行，就复制那一句。</span></div>
+<div class="mini"><b>📄 导入书单</b><span>批量页支持从 txt / csv 导入书名，也可以把文件直接拖进窗口；书库页有筛选框，书多了也好找。</span></div>
+<div class="mini"><b>🧠 思维导图</b><span>把一本书的划线画成脑图，可导出 PNG / SVG；也能导出大纲（Markdown / OPML）直接导入 XMind、幕布。</span></div>
+<div class="mini"><b>🔗 跨书去重合并</b><span>把不同书里说同一件事的句子归到一起 —— 被反复强调的道理才最值得记住。本地算，不外传。</span></div>
+<div class="mini"><b>🎯 专注模式</b><span>按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> 一键隐藏侧栏和顶栏，屏幕只剩正文。</span></div>
+<div class="mini"><b>⚡ 全文索引</b><span>书库用 FTS5 建全文索引，几百本书里搜一个词也是毫秒级。</span></div>
+<div class="mini"><b>🖱 右键快捷操作</b><span>在结果表格里右键 → 复制这一句 / 复制本章 / 复制整本；双击任意一行直接复制那句话。</span></div>
+</div>
+
+<h3>导出格式怎么选</h3>
+<table>
+<tr><th>格式</th><th>什么时候用</th></tr>
+<tr><td>HTML 网页</td><td>自己看。页面顶部有「复制 Markdown」按钮，方便贴给别人</td></tr>
+<tr><td>Markdown</td><td>喂给 AI（DeepSeek / ChatGPT 等）最顺，序号和标题结构它最熟</td></tr>
+<tr><td>纯文本</td><td>万能兜底，粘哪儿都不会乱</td></tr>
+<tr><td>CSV</td><td>要用 Excel 排序、筛选、做透视表时</td></tr>
+<tr><td>JSON</td><td>给程序用</td></tr>
+<tr><td><b>Word（.docx）</b></td><td>要接着编辑、写读书报告、交作业时</td></tr>
+<tr><td><b>PDF</b></td><td>打印、归档、发给别人但不想被改</td></tr>
+<tr><td><b>EPUB</b></td><td>导入 Kindle / 微信读书 / Apple Books，当成一本小书来读</td></tr>
+<tr><td><b>分享版</b></td><td><b>发给朋友看。</b>手机自适应、按章节分组，在微信/飞书里发出去有预览</td></tr>
+</table>
+
+<h3>导出模板可以自己调</h3>
+<p>在 <b>设置 → 导出模板</b> 里可以改：<b>正文字号</b>、<b>是否带章节</b>、<b>是否带序号</b>、<b>标题颜色</b>。
+调完对 Word / PDF / EPUB / 网页 / 分享版 / Markdown <b>全部生效</b> —— 不用每个格式单独设一遍。</p>
+<p style="font-size:14px;color:#5B5A85">在<b>设置 → 抓取与导出 → 导出格式</b>里可以多选，之后导出下拉选「按设置（多格式）」就会一次生成多份。</p>
+
+<div class="ok">
+<b>导出的文件里默认不含「N 人划线」。</b><br>
+文件里只有句子和章节 —— 发给别人看的是内容，不是平台数据。想看热度排序，在软件的结果表格里看就行。<br>
+需要还原成带人数的版本，去 <b>设置 → 抓取与导出 → 导出内容里带上「N 人划线」</b> 打开开关即可。
+</div>
+
+<h3>想按心情换换样子</h3>
+<p>设置页可以换 <b>4 套主色</b>（蓝紫暮光 / 青柠薄荷 / 蜜桃气泡 / 深海蔚蓝）× <b>浅色 / 深色 / 跟随系统</b>，圆角大小也能拖。换完立刻生效，不用重启。</p>
+
+<h2>四、快捷键</h2>
+<table>
+<tr><th>按键</th><th>作用</th></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>命令面板（也能直接当搜索框：敲书名回车就搜）</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>跳到搜索框</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>对当前这本书发起 AI 整理</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>导出当前结果</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>R</kbd></td><td>刷新当前页</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>6</kbd></td><td>切换到第 1~6 个页面</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>,</kbd></td><td>打开设置</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></td><td>专注模式（隐藏侧栏和顶栏）</td></tr>
+<tr><td>表格里右键</td><td>复制这一句 / 复制本章 / 复制整本 / 生成思维导图</td></tr>
+</table>
+
+<h2>五、常见问题</h2>
+
+<div class="warn">
+<b>Windows 提示「已保护你的电脑」/「未知发布者」怎么办？</b><br>
+这是所有个人开发的小工具都会遇到的提示（因为没有买代码签名证书）。<br>
+点 <b>更多信息 → 仍要运行</b> 即可。
+</div>
+
+<h3>关于风控，我要说清楚</h3>
+<ul>
+  <li>程序只用公开接口读<b>公开数据</b>，而且<b>不携带任何登录信息</b>（不发 Cookie）。服务端拿不到你的账号身份，技术上无法归因到个人账号。</li>
+  <li>批量抓取默认每本之间<b>随机停 2~4 秒</b>，请不要调成 0 —— 那是把风险从「几乎为零」变成「有可能」。</li>
+  <li>它仍然属于「非官方接口」。建议：<b>不要一次刷几百本</b>，也不要把抓下来的内容公开传播。</li>
+  <li>想更稳妥，就用「批量队列」慢慢跑，一次十几本，中间去干点别的。</li>
+</ul>
+
+<h3>数据存在哪里？</h3>
+<ul>
+  <li>导出文件：程序旁边的 <code>exports</code> 文件夹（可以在设置里改到别处）。</li>
+  <li>本地书库：<code>data\hotmarks.db</code>（一个 SQLite 文件，删掉就等于清空书库）。</li>
+  <li>设置：<code>data\settings.json</code>，包括 API Key —— <b>只存在你本机，不会上传到任何地方</b>。</li>
+</ul>
+
+<h3>抓取老失败怎么办？</h3>
+<p>去 <b>设置 → 网络</b>：把<b>超时</b>调到 40~60 秒、<b>重试次数</b>调到 5 次。程序默认就会指数退避重试
+（0.8 秒 → 1.6 秒 → 3.2 秒，带随机抖动），所以偶尔抽风不用管它。</p>
+<p>如果你的网络需要代理才能出去，把代理地址填上（例如 <code>http://127.0.0.1:7890</code>）；<b>留空就是直连</b>，同时会沿用系统环境变量里的代理。</p>
+
+<h3>API Key 怎么填？</h3>
+<p>打开 <b>设置 → AI 助手</b>，选一个提供商（推荐 DeepSeek，便宜且中文好），点「获取 Key」跳到官网申请，粘贴回来，再点「测试连接」确认能通。</p>
+<p style="color:#8B8AAE;font-size:14px">不想用云端也行：装个本地 Ollama，提供商选「本地 Ollama」，不花钱、不联网。</p>
+
+<footer>
+书脉 BookPulse · 个人学习项目 · 2026<br>
+内容来自微信读书读者公开划线，仅供个人学习使用
+</footer>
+
+</main>
+</body>
+</html>

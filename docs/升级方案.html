@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>微信读书 · 热门划线工作台 —— 升级方案</title>
+<style>
+:root{
+  --green:#07c160; --green-d:#06ad56; --ink:#0f172a; --ink2:#334155;
+  --muted:#64748b; --line:#e5e9ef; --bg:#f4f6f9; --card:#fff;
+  --side:#1e293b; --orange:#ff8a3d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.8 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+header{background:linear-gradient(135deg,#07c160,#0aa552);color:#fff;padding:44px 22px 38px}
+header .in{max-width:920px;margin:0 auto}
+header h1{margin:0;font-size:27px;letter-spacing:.5px}
+header p{margin:12px 0 0;opacity:.94;font-size:14.5px}
+header .tags{margin-top:18px;display:flex;gap:8px;flex-wrap:wrap}
+header .tags span{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.32);
+  border-radius:20px;padding:3px 13px;font-size:12.5px}
+main{max-width:920px;margin:0 auto;padding:30px 22px 70px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:24px 26px;margin-bottom:20px;box-shadow:0 2px 12px rgba(15,23,42,.04)}
+h2{margin:0 0 6px;font-size:19px;display:flex;align-items:center;gap:9px}
+h2 .num{background:var(--green);color:#fff;width:26px;height:26px;border-radius:8px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:13.5px;flex:none}
+h3{margin:22px 0 8px;font-size:15.5px;color:var(--ink2);
+  border-left:3px solid var(--green);padding-left:10px}
+p{margin:9px 0}
+.lead{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:#f8fafc;color:var(--muted);font-weight:600;font-size:12.5px}
+tr:nth-child(even) td{background:#fcfdfe}
+code{background:#f1f5f9;border-radius:5px;padding:1px 6px;font-size:13px;
+  font-family:Consolas,"Courier New",monospace;color:#0f172a}
+.ok{color:var(--green-d);font-weight:600}
+.plan{color:var(--muted);font-weight:600}
+.warn{color:#b91c1c;font-weight:600}
+.hero{background:#effaf4;border:1px solid #c7ecd9;border-radius:12px;padding:16px 18px;
+  margin:14px 0;font-size:14.5px}
+.hero b{color:var(--green-d)}
+/* 架构图 */
+.arch{margin:16px 0}
+.layer{border-radius:11px;padding:12px 16px;margin-bottom:9px;border:1px solid var(--line);
+  background:#fff;position:relative;padding-left:104px;min-height:56px}
+.layer .lb{position:absolute;left:0;top:0;bottom:0;width:92px;display:flex;align-items:center;
+  justify-content:center;font-size:12.5px;font-weight:700;color:#fff;border-radius:11px 0 0 11px}
+.layer .items{font-size:13.5px;color:var(--ink2);line-height:1.7}
+.layer small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.l1 .lb{background:#07c160}.l2 .lb{background:#0ea5e9}.l3 .lb{background:#8b5cf6}
+.l4 .lb{background:#f59e0b}.l5 .lb{background:#64748b}
+/* 时间线 */
+.road{position:relative;margin:18px 0 6px;padding-left:26px}
+.road::before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:#e2e8f0}
+.step{position:relative;margin-bottom:20px}
+.step::before{content:"";position:absolute;left:-22px;top:7px;width:12px;height:12px;
+  border-radius:50%;background:#cbd5e1;border:2px solid #fff;box-shadow:0 0 0 2px #e2e8f0}
+.step.done::before{background:var(--green);box-shadow:0 0 0 2px #c7ecd9}
+.step.next::before{background:var(--orange);box-shadow:0 0 0 2px #ffe2c9}
+.step .st{font-weight:700;font-size:14.5px}
+.step .sd{color:var(--muted);font-size:13px;margin-top:3px}
+.step .ac{font-size:12.5px;color:var(--ink2);margin-top:5px;background:#f8fafc;
+  border-radius:8px;padding:7px 11px;border-left:3px solid #e2e8f0}
+ul{margin:8px 0;padding-left:22px}li{margin:5px 0}
+footer{text-align:center;color:#94a3b8;font-size:12px;padding:26px}
+.pill{display:inline-block;border-radius:20px;padding:1px 10px;font-size:12px;font-weight:600}
+.pill.done{background:#e8f8ef;color:#0a8f4c}
+.pill.next{background:#fff4e8;color:#c2410c}
+.pill.later{background:#f1f5f9;color:#64748b}
+</style>
+</head>
+<body>
+<header><div class="in">
+  <h1>微信读书 · 热门划线工作台</h1>
+  <p>从「终端脚本」升级为「桌面软件 + 批量管道 + 知识库」的完整方案</p>
+  <div class="tags">
+    <span>PySide6 桌面应用</span><span>批量队列 · 防风控</span>
+    <span>多格式导出</span><span>可打包 exe</span><span>LLM 整理闭环</span>
+  </div>
+</div></header>
+
+<main>
+
+<section>
+  <h2><span class="num">0</span>一句话结论</h2>
+  <div class="hero">
+    把现在的 <code>.bat → 黑框 → 生成 HTML</code> 升级成
+    <b>双击即开的桌面工作台</b>：能搜、能预览、能批量、能选格式、能管文件；
+    再往上是 <b>SQLite 本地知识库</b>（避免重复请求、支持历史对比）与
+    <b>「抓取 → 聚合 → LLM 整理 → 飞书推送」闭环</b>。
+  </div>
+  <p class="lead">原则：<b>只新增、不破坏</b>。原来的 .bat、CLI、控制台版脚本全部保留可用，桌面版是新增的一层。</p>
+</section>
+
+<section>
+  <h2><span class="num">1</span>现状盘点</h2>
+  <table>
+    <tr><th>能力</th><th>载体</th><th>状态</th></tr>
+    <tr><td>搜书名 → 拿全量热门划线</td><td><code>core.py</code></td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>单本导出（HTML / MD / TXT / CSV / JSON）</td><td><code>core.py</code> + GUI</td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>结果目录统一归集</td><td><code>exports/</code></td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>批量队列（随机间隔 · 可中止 · 失败隔离）</td><td>GUI「批量队列」</td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>图形界面（三区：搜索 / 批量 / 导出记录）</td><td><code>app_gui.py</code></td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>HTML 内一键复制（带序号，喂 LLM）</td><td><code>template.py</code></td><td><span class="pill done">已完成</span></td></tr>
+    <tr><td>控制台版浏览器脚本</td><td><code>weread-hotmarks.js</code></td><td><span class="pill done">已完成</span></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="num">2</span>五条升级主线</h2>
+
+  <h3>2.1 交互形态：脚本 → 软件 → 免安装 exe</h3>
+  <ul>
+    <li>现在：双击 <code>.bat</code> 弹黑框，靠问答式输入。</li>
+    <li>已升级：桌面工作台，左侧导航 + 表格 + 进度条 + 深色日志区，全程可视可控。</li>
+    <li>下一步：<b>打包成单个 exe</b>，丢到桌面双击就用，不装 Python、不进命令行。</li>
+  </ul>
+
+  <h3>2.2 批量能力：单本 → 队列 → 定时订阅</h3>
+  <ul>
+    <li>现在：一次一本。</li>
+    <li>已升级：一行一个书名贴进去，顺序抓取，<b>两本之间随机等 2~4 秒</b>，随时可中止，单本失败不影响后面的。</li>
+    <li>下一步：<b>书单导入</b>（粘贴一整份书单）、<b>定时增量</b>（每天自动抓一次，只告诉你「今天多了哪几条热门划线」）。</li>
+  </ul>
+
+  <h3>2.3 数据形态：文本 → 本地知识库</h3>
+  <ul>
+    <li>现在：一堆散落的文件，重复抓同一本书要重新联网。</li>
+    <li>下一步：引入 <b>SQLite 单文件数据库</b>——
+      <ul>
+        <li>同一本书抓过一次就入库，之后<b>离线可查</b>，不再重复请求（额外降低风控暴露面）；</li>
+        <li>支持<b>热度变化追踪</b>：三天前这条 300 人划线，今天 500 人，一眼看出哪句话正在被越来越多人标记；</li>
+        <li>支持<b>跨书检索</b>：搜「复利」时，把十本书里所有含这个词的高热划线一次列出来。</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>2.4 智能整理：导出 → LLM 闭环</h3>
+  <ul>
+    <li>现在：导出的 Markdown 你自己贴给 DeepSeek。</li>
+    <li>下一步：<b>内置「整理提示词」模板</b>——按主题聚类、按章节归并、提炼成读书笔记骨架，点一下就生成配好提示词的整段内容，复制即用；再做<b>跨书主题聚合</b>（把 N 本书的划线合起来问「这些书在同一个问题上怎么说」）。</li>
+  </ul>
+
+  <h3>2.5 生态连接：单机 → 你的自动化体系</h3>
+  <ul>
+    <li>下一步：导出结果一键推到<b>飞书</b>（你已经在用飞书做文档协作）；接入 <b>n8n</b> 做后续流水线。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">3</span>功能矩阵</h2>
+  <table>
+    <tr><th>模块</th><th>功能</th><th>状态</th></tr>
+    <tr><td rowspan="5">搜索下载</td><td>书名搜索 + 候选列表</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>一键抓全部热门划线</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>表格预览（序号 / 章节 / 内容 / 人数）</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>导出前选条数</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>关键词二次过滤</td><td><span class="pill later">规划中</span></td></tr>
+    <tr><td rowspan="4">批量队列</td><td>多书名队列 + 去重</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>随机间隔防风控 / 可中止</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>失败隔离 + 逐条日志</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>书单文件导入 / 定时任务</td><td><span class="pill later">规划中</span></td></tr>
+    <tr><td rowspan="4">导出</td><td>HTML（带复制按钮）/ MD / TXT / CSV / JSON</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>文件名带时间戳，永不覆盖</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>导出记录浏览 / 打开 / 回收站删除</td><td><span class="pill done">已实现</span></td></tr>
+    <tr><td>多本合并成一张总表</td><td><span class="pill later">规划中</span></td></tr>
+    <tr><td rowspan="3">知识库</td><td>SQLite 本地缓存（离线可查）</td><td><span class="pill later">规划中</span></td></tr>
+    <tr><td>热度变化追踪</td><td><span class="pill later">规划中</span></td></tr>
+    <tr><td>跨书关键词检索</td><td><span class="pill later">规划中</span></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="num">4</span>架构：为什么这样分层</h2>
+  <p class="lead">关键点：界面层与核心层<b>彻底解耦</b>。以后换界面（比如做手机端、做 Web 版）都不用碰抓取逻辑。</p>
+  <div class="arch">
+    <div class="layer l1"><div class="lb">界面层</div><div class="items">
+      <code>app_gui.py</code>（PySide6 工作台）｜<code>weread_hotmarks.py</code>（CLI）
+      <small>只负责展示与调度，不写任何抓取逻辑</small></div></div>
+    <div class="layer l2"><div class="lb">核心层</div><div class="items">
+      <code>core.py</code>　搜索 / 抓取 / 渲染 / 导出
+      <small>唯一真相源：改接口只改这一处，所有界面自动同步</small></div></div>
+    <div class="layer l3"><div class="lb">模板层</div><div class="items">
+      <code>template.py</code>　HTML 模板（内联 CSS/JS）
+      <small>卡片与复制文本同源于一份 JSON，永远一致</small></div></div>
+    <div class="layer l4"><div class="lb">网络层</div><div class="items">
+      只读 GET · 不带 Cookie · 超时与异常统一包装
+      <small>批量时叠加随机间隔，避免高频特征</small></div></div>
+    <div class="layer l5"><div class="lb">存储层</div><div class="items">
+      <code>exports/</code> 文件输出　→　（规划）SQLite 知识库
+      <small>文件名带时间戳，永不覆盖既有成果</small></div></div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">5</span>路线图</h2>
+  <div class="road">
+    <div class="step done">
+      <div class="st">阶段 1 · 从脚本到软件 <span class="pill done">已完成</span></div>
+      <div class="sd">核心层解耦、桌面工作台、导出目录、批量队列、多格式导出</div>
+      <div class="ac">验收：双击「启动工作台.bat」出窗口；批量 3 本书能全部落到 exports/；CLI 老入口照常可用</div>
+    </div>
+    <div class="step next">
+      <div class="st">阶段 2 · 打包成独立 exe <span class="pill next">建议下一步</span></div>
+      <div class="sd">PyInstaller 打成单个 exe，桌面快捷方式，彻底摆脱 Python 环境</div>
+      <div class="ac">验收：在没装 Python 的情况下双击 exe 能打开并完成一次导出</div>
+    </div>
+    <div class="step">
+      <div class="st">阶段 3 · 本地知识库 <span class="pill later">规划</span></div>
+      <div class="sd">SQLite 缓存已抓过的书；离线浏览；热度变化对比；跨书检索</div>
+      <div class="ac">验收：同一本书第二次打开是秒开、零网络请求；能列出「本周涨幅最大的 10 条划线」</div>
+    </div>
+    <div class="step">
+      <div class="st">阶段 4 · 智能整理闭环 <span class="pill later">规划</span></div>
+      <div class="sd">内置整理提示词模板、跨书主题聚合、一键复制给 DeepSeek</div>
+      <div class="ac">验收：选 3 本书 → 一键产出「共同主题 + 各自观点」的结构化 Markdown</div>
+    </div>
+    <div class="step">
+      <div class="st">阶段 5 · 订阅与推送 <span class="pill later">规划</span></div>
+      <div class="sd">定时增量抓取（Windows 计划任务）、变化提醒、飞书推送、n8n 承接</div>
+      <div class="ac">验收：每天早上自动检查关注的书，有新晋热门划线就推一条摘要到飞书</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">6</span>风控与合规（批量后更要守）</h2>
+  <table>
+    <tr><th>事实层级</th><th>内容</th></tr>
+    <tr><td><b>代码层可验证</b></td>
+      <td>只发 <code>GET</code>；<b>不带任何 Cookie</b>（默认请求器不含 Cookie 处理器）；无并发、无翻页循环；一次请求拿全书。服务端拿不到身份标识，<b>技术上无法归因到账号</b>，最坏情况是限 IP。</td></tr>
+    <tr><td><b>已验证</b></td><td>该接口未登录即返回 200，本身不要求身份。</td></tr>
+    <tr><td><b>仍然存在的风险</b></td>
+      <td>这是非官方接口，平台协议通常禁止未经许可的自动化获取 —— 属<b>条款层面</b>风险，与「会不会封号」是两件事。</td></tr>
+    <tr><td><b>不确定</b></td><td>平台风控的具体规则与是否使用额外识别手段，无内部信息，不做保证。</td></tr>
+  </table>
+  <h3>三条纪律（批量场景必须守）</h3>
+  <ul>
+    <li><b>保留间隔</b>：默认 2~4 秒随机，别调成 0 秒连发。</li>
+    <li><b>别做公开服务</b>：不要把它架成给他人用的网站或接口。</li>
+    <li><b>别传播抓取结果</b>：自用学习可以，公开批量分发不建议。</li>
+  </ul>
+  <p class="lead">补充：桌面版默认走不带 Cookie 的通道（也就是风险最低的那条）；浏览器控制台版会带登录态，只建议偶尔手工用。</p>
+</section>
+
+<section>
+  <h2><span class="num">7</span>技术选型：为什么是 PySide6</h2>
+  <table>
+    <tr><th>方案</th><th>界面上限</th><th>额外工具链</th><th>打包 exe</th><th>结论</th></tr>
+    <tr><td><b>PySide6</b></td><td>高</td><td>无（纯 pip）</td><td>可以</td><td class="ok">采用</td></tr>
+    <tr><td>本地 Web UI + 浏览器</td><td>最高</td><td>无</td><td>较绕</td><td>备选</td></tr>
+    <tr><td>Tauri 2.0 + Rust</td><td>最高</td><td>要装 Rust 工具链</td><td>可以</td><td>暂不</td></tr>
+  </table>
+  <p><b>选它的三个理由：</b></p>
+  <ul>
+    <li>不用装任何额外工具链 —— 纯 pip，不占你紧张的 C 盘（虚拟环境已放在项目内的 D 盘）；</li>
+    <li>能打包成独立 exe，符合「成熟软件」的形态；</li>
+    <li>你另一个项目 <code>scroll-extract</code> 用的也是 PySide6 —— <b>学一次能改两个项目</b>。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">8</span>现在的目录结构</h2>
+  <table>
+    <tr><th>路径</th><th>作用</th></tr>
+    <tr><td><code>启动工作台.bat</code></td><td class="ok">双击打开图形界面（日常入口）</td></tr>
+    <tr><td><code>一键查热门划线.bat</code></td><td>老入口，命令行版，保留可用</td></tr>
+    <tr><td><code>app_gui.py</code></td><td>桌面工作台主程序</td></tr>
+    <tr><td><code>core.py</code></td><td>核心逻辑（界面与命令行共用）</td></tr>
+    <tr><td><code>template.py</code></td><td>导出 HTML 的模板</td></tr>
+    <tr><td><code>weread_hotmarks.py</code></td><td>命令行外壳</td></tr>
+    <tr><td><code>weread-hotmarks.js</code></td><td>浏览器控制台版（备用）</td></tr>
+    <tr><td><code>exports/</code></td><td class="ok">所有导出的文件都进这里</td></tr>
+    <tr><td><code>成果样例/</code></td><td>历史成果留档</td></tr>
+    <tr><td><code>setup_env.bat</code></td><td>重建虚拟环境（换电脑/重装时才用）</td></tr>
+  </table>
+  <p class="lead">提示：<code>.venv/</code> 是 Python 虚拟环境目录（约 300MB），不用管它，也<b>不要删</b> —— 删了桌面版就打不开了，重新双击 setup_env.bat 可以恢复。</p>
+</section>
+
+</main>
+<footer>微信读书 · 热门划线工作台 升级方案　·　2026-10-02</footer>
+</body>
+</html>
