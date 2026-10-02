@@ -23,6 +23,7 @@
 ================================================================================
 """
 import os
+import re
 import sys
 import csv
 import io
@@ -443,55 +444,83 @@ COOKIE_KEY_NAMES = ('wr_vid', 'wr_skey', 'wr_rt', 'wr_localvid',
                     'wr_gid', 'wr_fp', 'wr_uid', 'wr_name')
 
 
-def cookie_keys(cookie):
-    """从粘贴进来的内容里认出含哪些关键字段。
+# 分隔符优先级：**Tab 最优先** —— 从 DevTools 表格复制出来是 Tab 分隔，
+# 而且单元格里常常带 https:// 这种冒号，若不先判 Tab 会被冒号截错。
+# 真正的 Cookie 串里不会出现制表符，所以 tab-first 是安全的。
+_SEPS = ('\t', '=', ':')
 
-    用户可能从 DevTools 复制成好几种样子，这里都认：
-      · 标准串      wr_vid=123; wr_skey=abc;
-      · 一行一个    每行「名字=值」
-      · JSON        {"wr_vid": "123", "wr_skey": "abc"}（某些插件导出成这个）
-      · 带路径域    名字=值; Path=/; Domain=.weread.qq.com
-    """
-    s = cookie or ''
-    if not s.strip():
-        return []
-    names = set()
-    # JSON 形态
-    st = s.strip()
-    if st.startswith('{') or st.startswith('['):
-        try:
-            import json as _json
-            obj = _json.loads(st)
-            if isinstance(obj, dict):
-                names |= {str(k).strip() for k in obj.keys()}
-            elif isinstance(obj, list):
-                for it in obj:
-                    if isinstance(it, dict) and it.get('name'):
-                        names.add(str(it['name']).strip())
-        except Exception:
-            pass
-    # 常规「名=值」形态（; 或换行分隔）
-    for chunk in s.replace('\r', '\n').replace('\n', ';').split(';'):
+
+def _split_pair(chunk):
+    """把一段文本拆成 (名字, 值)；拆不出来返回 None。"""
+    for sep in _SEPS:
+        if sep in chunk:
+            if sep == '\t':
+                # Tab 分隔的行常带着后面的「域 / 过期时间 / 大小」等列，
+                # 只取第二列，免得把整个表格塞进 cookie 值里
+                nm = chunk.split('\t')[0]
+                val = chunk.split('\t')[1]
+            else:
+                nm, val = chunk.split(sep, 1)
+            # 顺带剥掉 cURL 复制残留的引号与续行反斜杠
+            nm = nm.strip().strip("'\"").strip()
+            val = val.strip()
+            # 值里出现引号 → 说明后面是 cURL 的其它参数了，在引号处截断
+            for q in ("'", '"'):
+                if q in val:
+                    val = val.split(q, 1)[0]
+            val = val.strip().rstrip('\\').strip()
+            return nm, val
+    return None
+
+
+def _parse_blob(blob):
+    """把「名字=值; 名字=值」或「名字: 值」这种串解析成键值对。"""
+    out = []
+    for chunk in blob.replace('\r', '\n').replace('\n', ';').split(';'):
         chunk = chunk.strip()
-        if not chunk or '=' not in chunk:
+        if not chunk:
             continue
-        nm = chunk.split('=', 1)[0].strip()
-        if nm:
-            names.add(nm)
-    return [k for k in COOKIE_KEY_NAMES if k in names]
+        kv = _split_pair(chunk)
+        if kv and kv[0]:
+            out.append(kv)
+    return out
 
 
-def normalize_cookie(cookie):
-    """把用户粘的内容整理成标准 Cookie 头（顺带丢掉 Path/Domain 等属性）。
+def _looks_like_cookie_name(nm):
+    """这个键名像不像微信读书的 Cookie（而不是 HTTP 头）。"""
+    n = (nm or '').strip()
+    if not n:
+        return False
+    if n in COOKIE_KEY_NAMES:
+        return True
+    low = n.lower()
+    return low.startswith('wr_') or low.startswith('_')
 
-    这样即使他从 DevTools 整行复制（含 Path=/; Domain=.weread.qq.com），
-    也能正常当 Cookie 发出去。
+
+def _cookie_pairs(raw):
+    """把用户粘贴的**任何形态**统一解析成 [(名字, 值), ...]。
+
+    实测用户能粘出这些样子，全部要认：
+      · 标准串        wr_vid=1; wr_skey=2
+      · 带前缀        Cookie: wr_vid=1; wr_skey=2
+      · 整段请求头    从 Network → Request Headers 整块复制，里面夹着
+                      authority / method / path 等噪声行
+      · 面板逐行      Application → Cookies 里选中多行复制，
+                      出来是「名字 Tab 值 Tab 域 Tab …」
+      · 名字: 值      Application 面板用「:」拼出来的形态
+      · JSON 对象     {"wr_vid":"1","wr_skey":"2"}（某些插件导出成这个）
+      · DevTools 数组 [{"name":"wr_vid","value":"1"}]
+      · 带属性        名字=值; Path=/; Domain=.weread.qq.com; Secure
+
+    「整段请求头」最容易出错：直接把 `authority: xxx` 当 cookie 会塞进一堆垃圾键，
+    真正有用的那行反而被埋掉 —— 所以有 `Cookie:` 行时只认那一行。
     """
-    s = (cookie or '').strip()
+    s = (raw or '').strip()
     if not s:
-        return ''
-    # JSON 形态（某些浏览器插件导出成这样），先转成「名=值」串
-    if s.startswith('{') or s.startswith('['):
+        return []
+
+    # ---- 1) JSON / DevTools 数组 ----
+    if s[0] in '{[':
         try:
             import json as _json
             obj = _json.loads(s)
@@ -503,23 +532,83 @@ def normalize_cookie(cookie):
                     if isinstance(it, dict) and it.get('name') is not None:
                         items.append((it.get('name'), it.get('value', '')))
             if items:
-                s = '; '.join('%s=%s' % (k, v) for k, v in items)
+                return [(str(k).strip(), str(v).strip())
+                        for k, v in items if str(k).strip()]
         except Exception:
-            pass
-    pairs = []
-    for chunk in s.replace('\r', '\n').replace('\n', ';').split(';'):
-        chunk = chunk.strip()
-        if not chunk or '=' not in chunk:
+            pass        # 不是合法 JSON，退回按文本处理
+        return []
+
+    # ---- 2) 找 Cookie 那一行 ----
+    # 两种常见来源都要认：
+    #   a) Request Headers 里的  Cookie: xxx
+    #   b) 右键 Copy as cURL 出来的  -H 'cookie: xxx' \
+    def _is_setcookie(low):
+        return 'set-cookie' in low
+
+    lines = [l.strip() for l in
+             s.replace('\r\n', '\n').replace('\r', '\n').split('\n') if l.strip()]
+    cookie_payloads = []
+    for l in lines:
+        low = l.lower()
+        if _is_setcookie(low):
             continue
-        nm, val = chunk.split('=', 1)
-        nm, val = nm.strip(), val.strip()
-        # 跳过 Cookie 属性，它们不该出现在请求头里
-        if nm.lower() in ('path', 'domain', 'expires', 'max-age',
-                          'samesite', 'secure', 'httponly', 'priority'):
+        if low.startswith('cookie:') or low.startswith('cookie：'):
+            cookie_payloads.append(l.split(':', 1)[1])
+    if not cookie_payloads:
+        # cURL：-H 'cookie: a=b; c=d' \  —— 在行内任意位置找 cookie:
+        for l in lines:
+            low = l.lower()
+            if _is_setcookie(low):
+                continue
+            m = re.search(r'cookie\s*[:：]', l, re.I)
+            if m:
+                cookie_payloads.append(l[m.end():])
+                break
+    if cookie_payloads:
+        out = []
+        for l in cookie_payloads:
+            out += _parse_blob(l)
+        return out
+    # 单行也可能留着 Cookie: 前缀
+    low = s.lower()
+    if low.startswith('cookie:') or low.startswith('cookie：'):
+        return _parse_blob(s.split(':', 1)[1])
+
+    # ---- 3) 其余形态：拼起来统一解析（= / : / Tab 都试）----
+    pairs = _parse_blob('; '.join(lines) if lines else s)
+
+    # ---- 4) 兜底校验：至少要认出一个「像 cookie」的键 ----
+    # 没有的话，说明用户多半把请求头/响应头粘到了这里（比如只想复制
+    # Cookie 那一行，却整段选中了 Request Headers），这时宁可明确报
+    # 「没识别到关键字段」，也不要塞一堆 authority=/method= 的垃圾进去。
+    if pairs and not any(_looks_like_cookie_name(nm) for nm, _ in pairs):
+        return []
+    return pairs
+
+
+# 这些是 Cookie 的**属性**，不是 Cookie 本身，出现在请求头里会被服务端当垃圾
+_COOKIE_ATTRS = {'path', 'domain', 'expires', 'max-age', 'samesite',
+                 'secure', 'httponly', 'priority', 'comment', 'version'}
+
+
+def cookie_keys(cookie):
+    """从粘贴进来的内容里认出含哪些关键字段。返回顺序固定，便于稳定展示。"""
+    names = {nm for nm, _ in _cookie_pairs(cookie)}
+    return [k for k in COOKIE_KEY_NAMES if k in names]
+
+
+def normalize_cookie(cookie):
+    """把用户粘的内容整理成标准 Cookie 请求头。
+
+    会自动丢掉 Path / Domain / Expires / Secure / SameSite 这些属性 ——
+    它们只属于浏览器的存储描述，跟着发出去反而不干净。
+    """
+    out = []
+    for nm, val in _cookie_pairs(cookie):
+        if nm.lower() in _COOKIE_ATTRS:
             continue
-        if nm:
-            pairs.append('%s=%s' % (nm, val))
-    return '; '.join(pairs)
+        out.append('%s=%s' % (nm, val))
+    return '; '.join(out)
 
 
 def _info_id_from_link(link):

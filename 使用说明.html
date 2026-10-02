@@ -155,23 +155,34 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 微信读书的 AI 大纲<b>正文接口必须带登录态</b>才会返回（不带会直接 403）。
 所以设置里有一项「微信读书登录」：把浏览器的 Cookie 粘进去即可。
 <b>只有这一项功能会带上它</b> —— 抓热门划线始终不带 Cookie，Cookie 也只存在你自己电脑上。<br><br>
-<b>怎么把 Cookie 交给程序（三步，一次搞定，之后长期有效）：</b>
+<b>怎么把 Cookie 交给程序（一次搞定，之后长期有效，通常管数周到数月）：</b>
 <ol style="margin:8px 0 8px 18px;line-height:1.9">
   <li>在程序里点 <b>设置 → 微信读书登录 → 「打开微信读书（去登录）」</b>，
       用它打开的页面<b>登录你的微信读书账号</b>（这一步只是登录，不是把密码交给程序）。</li>
-  <li>按 <kbd>F12</kbd> 打开开发者工具 → 切到 <b>Application / 应用程序</b> 标签
-      → 左侧找到 <b>Cookies</b> → 展开后点 <b>https://weread.qq.com</b>。</li>
-  <li>把 <code>wr_vid</code>、<code>wr_skey</code> 这几条按
-      <code>名字=值; 名字=值</code> 拼成一行，粘到程序里，点 <b>「测试连接」</b>。
-      程序会显示<b>识别到哪些字段</b>，并自动拿一本有要点的书实测一次，直接告诉你成不成。</li>
+  <li>在那个网页上按 <kbd>F12</kbd>，切到 <b>Network / 网络</b> 标签，刷新一下页面，
+      然后<b>随便点其中一条请求</b>。</li>
+  <li>在右侧找到 <b>Request Headers / 请求标头</b> 里的 <code>Cookie</code> 那一行
+      （如果没看到，点一下 <b>「展开」/ Raw</b>）。
+      <b>在那一行上右键 → Copy value（复制值）</b>。</li>
+  <li>回到程序，点 <b>「从剪贴板粘贴」</b> → 点 <b>「测试连接」</b>。
+      程序会显示<b>识别到哪些字段</b>（正常应有 <code>wr_vid</code> 和 <code>wr_skey</code>），
+      并自动拿一本有要点的书实测一次，直接告诉你成不成。</li>
 </ol>
 <div style="margin:6px 0 10px;padding:10px 12px;background:#F1F0FB;border-radius:10px;font-size:14px">
-<b>省事的办法：</b>在开发者工具里选中 <code>wr_vid</code> 那一行，按住 <kbd>Shift</kbd> 再选
-<code>wr_skey</code>，右键 <b>Copy</b>；或者在 <b>Console</b> 里粘贴
-<code>copy(document.cookie)</code> 回车。然后回程序点
-<b>「从剪贴板粘贴」</b> —— 不用手工拼字符串。<br>
-程序能自动认出多种格式（标准串 / 一行一个 / 插件导出的 JSON），
-还会自动丢掉 <code>Path</code>、<code>Domain</code> 这些没用的属性。
+<b>为什么推荐从 Network 复制，而不是从 Application 面板拼？</b><br>
+Application 面板里那些 Cookie <b>标了 HttpOnly 的，JavaScript 读不到</b>
+（比如 <code>wr_skey</code> 常常就是），所以用
+<code>copy(document.cookie)</code> 这类办法<b>可能拿不全</b>；
+而 Network 里的请求头是<b>浏览器真正发出去的完整内容</b>，最保险。<br><br>
+<b>另一个同样省事的办法：</b>在 Network 里右键那条请求 →
+<b>Copy → Copy as cURL</b>，然后回程序点「从剪贴板粘贴」。程序也认这一整段。<br><br>
+<b>程序认得这些形态，你复制成什么样都行：</b>
+标准串（<code>名字=值; 名字=值</code>）、整段 Request Headers、
+Application 表格（Tab 分隔的多行）、<code>名字: 值</code>、
+Copy as cURL、插件导出的 JSON。<code>Path</code>、<code>Domain</code>、<code>Secure</code>
+这些属性会自动丢掉。<br>
+<b>万一复制错了地方</b>（比如粘成了响应头），程序会直接提示「没识别到关键字段」，
+不会拿着错东西去请求。
 </div>
 <b>为什么不能像 QQ 那样在程序里扫码？</b><br>
 因为微信读书的二维码是<b>微信官方</b>生成的，扫码后微信把登录凭据回调给

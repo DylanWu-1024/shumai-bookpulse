@@ -298,7 +298,14 @@ shumai-bookpulse/
 - `POST /web/book/outline/check` —— 章节结构 + 哪些章带要点，**不需要登录**
 - `POST /web/book/outline/inner` —— 要点正文，**需要登录态**，不带 Cookie 会返回 `HTTP 403`
 
-所以设置页有一个「微信读书登录」：把浏览器里的 Cookie 粘进去就行。**只有这一项功能会带上它**，抓热门划线始终不带 Cookie。Cookie 只存在你本机的 `data/settings.json`。
+所以设置页有一个「微信读书登录」：把浏览器里的 Cookie 粘进去就行。
+
+**去哪复制最稳**：浏览器 `F12` → **Network / 网络** 标签 → 点任意一条请求 → 在 **Request Headers** 里的 `Cookie` 那一行上**右键 → Copy value**。
+（不建议用 `copy(document.cookie)` —— 标了 HttpOnly 的 Cookie JS 读不到，`wr_skey` 常常就在里面，会拿不全。也可以直接用 **Copy → Copy as cURL**，程序同样认。）
+
+程序能识别多种粘贴形态：标准串、整段 Request Headers、Application 面板的表格、`名字: 值`、Copy as cURL、插件导出的 JSON，并会自动丢掉 `Path` / `Domain` 等属性。
+
+**只有这一项功能会带上它**，抓热门划线始终不带 Cookie。Cookie 只存在你本机的 `data/settings.json`。
 
 还有一件事要有预期：**并非每本书都有 AI 大纲**。《活着》整本 13 章一章都没有；《短线交易秘诀》则 125 章里有 122 章带要点。程序会直接告诉你这本书有没有。
 

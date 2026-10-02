@@ -298,7 +298,14 @@ Measured (2026-10-02):
 - `POST /web/book/outline/check` — chapter structure + which chapters have key points, **no sign-in needed**
 - `POST /web/book/outline/inner` — the actual key-point text, **requires sign-in**; returns `HTTP 403` without a Cookie
 
-So Settings has a "WeRead sign-in": just paste the Cookie from your browser. **Only this one feature sends it** — highlight fetching never does. The cookie stays in your local `data/settings.json`.
+So Settings has a "WeRead sign-in": just paste the Cookie from your browser.
+
+**Where to copy from (most reliable)**: `F12` → **Network** tab → click any request → in **Request Headers**, right-click the `Cookie` row → **Copy value**.
+(Avoid `copy(document.cookie)` — cookies marked HttpOnly are invisible to JS, and `wr_skey` usually is one of them. Or use **Copy → Copy as cURL**, which is also accepted.)
+
+Many paste formats are understood: plain cookie string, a full Request Headers block, the Application panel table, `name: value`, Copy as cURL, and JSON exports — with `Path` / `Domain` etc. stripped automatically.
+
+**Only this one feature sends it** — highlight fetching never does. The cookie stays in your local `data/settings.json`.
 
 Also set your expectations: **not every book has an AI outline.** 活着 has none across all 13 chapters; 短线交易秘诀 has key points in 122 of 125 chapters. The app tells you which case you're in.
 
