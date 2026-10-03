@@ -138,7 +138,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.6'
+APP_VERSION = '2.7'
 
 
 # ==========================================================================
@@ -685,9 +685,10 @@ class SearchPage(QWidget):
         self.btn_fetch.clicked.connect(self.do_fetch)
         lv.addWidget(self.btn_fetch)
 
-        # ---- 右：详情 ----
-        right = W.Card()
-        rv = card_layout(right)
+        # ---- 右：详情（悬浮大圆角「胶囊卡」—— 阴影更深，像浮在底面上）----
+        right = W.Card(name='FloatCard')
+        W.apply_shadow(right, blur=44, dy=12, alpha=52)   # 比普通卡片更「浮」
+        rv = card_layout(right, margins=(20, 16, 20, 18))
 
         head = QHBoxLayout()
         head.setSpacing(8)
@@ -711,53 +712,20 @@ class SearchPage(QWidget):
         head.addStretch(1)
         rv.addLayout(head)
 
-        # 工具栏拆成两行：上行是「导出前怎么取数」，下行是「拿到结果做什么」。
-        # 挤成一行时最后的主按钮会被裁掉（实测过），分开之后每行都松快。
-        tools = QHBoxLayout()
-        tools.setSpacing(8)
+        # ================================================================
+        # 操作区重构（磊哥反馈「按钮太多挤在一起，看不到主要内容」）：
+        #   · 一行主操作胶囊：返回 / 阅读 / 复制 / 看大纲 / 导出
+        #   · 「⋯ 更多」收起低频操作（按章查看 / 思维导图 / AI 整理 / 加入队列）
+        #   · 「⚙ 导出选项」折叠抽屉：条数 / 格式 / 排序 / 打开文件夹，默认收起
+        # ================================================================
+        acts = W.FlowLayout(spacing=8)
+
         # 「返回上一本」—— 配合同类型推荐用：点了推荐书之后能一路退回来。
         self.btn_back = QPushButton()
         self.btn_back.setProperty('flat', True)
         self.btn_back.hide()
         self.btn_back.clicked.connect(self.go_back)
-        tools.addWidget(self.btn_back)
-        tools.addWidget(_tag(T('search.count')))
-        self.cb_top = QComboBox()
-        self.cb_top.addItems(['50', '100', '300', T('batch.all')])
-        self.cb_top.setFixedWidth(96)
-        self.cb_top.setToolTip(T('search.count_tip'))
-        tools.addWidget(self.cb_top)
-        tools.addWidget(_tag(T('search.format')))
-        self.cb_fmt = QComboBox()
-        fill_formats(self.cb_fmt, settings.get('def_format'))
-        self.cb_fmt.setMinimumWidth(150)
-        tools.addWidget(self.cb_fmt)
-
-        # 排序方式 —— 直接作用在当前表格上，不另开窗口
-        tools.addWidget(_tag(T('search.sort')))
-        self.cb_sort = QComboBox()
-        self.cb_sort.addItem(T('sort.hot'), 'hot')
-        self.cb_sort.addItem(T('sort.chapter'), 'chapter')
-        _si = self.cb_sort.findData(settings.get('sort_mode'))
-        if _si >= 0:
-            self.cb_sort.setCurrentIndex(_si)
-        self.cb_sort.setFixedWidth(126)
-        self.cb_sort.setToolTip(T('sort.tip'))
-        self.cb_sort.currentIndexChanged.connect(self.on_sort_changed)
-        tools.addWidget(self.cb_sort)
-        tools.addStretch(1)
-
-        # 「打开导出文件夹」从界面左下角搬到这里 —— 它和导出是同一个动作链上的
-        self.btn_open = QPushButton('\U0001F4C2  ' + T('search.open_dir'))
-        self.btn_open.setProperty('ghost', True)
-        self.btn_open.setCursor(Qt.PointingHandCursor)
-        self.btn_open.clicked.connect(self.win.open_export_dir)
-        tools.addWidget(self.btn_open)
-        rv.addLayout(tools)
-
-        # 操作按钮用 FlowLayout：窗口不够宽时自动换行，而不是把最后一个
-        # 按钮压缩到「导到 expc」这种裁字（2026-10-03 磊哥截图反馈）。
-        acts = W.FlowLayout(spacing=8)
+        acts.addWidget(self.btn_back)
 
         # 去微信读书读这本书：用系统默认浏览器打开**阅读器**页面。
         # 踩过的坑：接口给的 deepLink 是详情页（book-detail），点进去只有简介，
@@ -771,31 +739,11 @@ class SearchPage(QWidget):
         self.btn_weread.customContextMenuRequested.connect(self._weread_menu)
         acts.addWidget(self.btn_weread)
 
-        self.btn_chapter = QPushButton(T('chapter.btn'))
-        self.btn_chapter.setProperty('flat', True)
-        self.btn_chapter.setEnabled(False)
-        self.btn_chapter.clicked.connect(self.show_chapters)
-        acts.addWidget(self.btn_chapter)
-
-        self.btn_map = QPushButton(T('mm.btn'))
-        self.btn_map.setProperty('flat', True)
-        self.btn_map.setEnabled(False)
-        self.btn_map.setToolTip(T('mm.hint'))
-        self.btn_map.clicked.connect(self.show_mindmap)
-        acts.addWidget(self.btn_map)
-
-        self.btn_ai = QPushButton(T('ai.btn'))
-        self.btn_ai.setProperty('flat', True)
-        self.btn_ai.setEnabled(False)
-        self.btn_ai.setToolTip(T('ai.empty_desc'))
-        self.btn_ai.clicked.connect(self.do_ai)
-        acts.addWidget(self.btn_ai)
-
-        self.btn_queue = QPushButton(T('search.to_batch'))
-        self.btn_queue.setProperty('flat', True)
-        self.btn_queue.setEnabled(False)
-        self.btn_queue.clicked.connect(self.to_queue)
-        acts.addWidget(self.btn_queue)
+        self.btn_copy = QPushButton('\U0001F4CB  ' + T('search.copy'))
+        self.btn_copy.setProperty('flat', True)
+        self.btn_copy.setEnabled(False)
+        self.btn_copy.clicked.connect(self.show_copy_menu)
+        acts.addWidget(self.btn_copy)
 
         # 抓完的这一本，直接能去看它的 AI 大纲（不用先去书库再跳一次）
         self.btn_to_outline = QPushButton('\U0001F4DA  ' + T('search.to_outline'))
@@ -805,17 +753,80 @@ class SearchPage(QWidget):
         self.btn_to_outline.clicked.connect(self.to_outline)
         acts.addWidget(self.btn_to_outline)
 
-        self.btn_copy = QPushButton(T('search.copy'))
-        self.btn_copy.setProperty('flat', True)
-        self.btn_copy.setEnabled(False)
-        self.btn_copy.clicked.connect(self.show_copy_menu)
-        acts.addWidget(self.btn_copy)
-
-        self.btn_export = QPushButton(T('search.export'))
+        self.btn_export = QPushButton('\u2B07  ' + T('search.export'))
+        self.btn_export.setProperty('ghost', True)
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.do_export)
         acts.addWidget(self.btn_export)
-        rv.addWidget(wrap_hfw(acts))     # 打开 heightForWidth，换行才生效
+
+        # 「⋯ 更多」：低频操作收进菜单。按钮对象仍保留（enable 逻辑复用），
+        # 菜单打开时把每个动作的可用状态同步过去。
+        self.btn_chapter = QPushButton(T('chapter.btn'))
+        self.btn_chapter.setEnabled(False)
+        self.btn_chapter.clicked.connect(self.show_chapters)
+        self.btn_map = QPushButton(T('mm.btn'))
+        self.btn_map.setEnabled(False)
+        self.btn_map.setToolTip(T('mm.hint'))
+        self.btn_map.clicked.connect(self.show_mindmap)
+        self.btn_ai = QPushButton(T('ai.btn'))
+        self.btn_ai.setEnabled(False)
+        self.btn_ai.setToolTip(T('ai.empty_desc'))
+        self.btn_ai.clicked.connect(self.do_ai)
+        self.btn_queue = QPushButton(T('search.to_batch'))
+        self.btn_queue.setEnabled(False)
+        self.btn_queue.clicked.connect(self.to_queue)
+
+        self.btn_more = QPushButton('\u22EF  ' + T('search.more'))
+        self.btn_more.setProperty('flat', True)
+        self.btn_more.setEnabled(False)
+        self.btn_more.clicked.connect(self.show_more_menu)
+        acts.addWidget(self.btn_more)
+
+        # 「⚙ 导出选项」抽屉开关
+        self.btn_opts = QPushButton('\u2699  ' + T('search.opts'))
+        self.btn_opts.setProperty('flat', True)
+        self.btn_opts.setCursor(Qt.PointingHandCursor)
+        self.btn_opts.clicked.connect(self.toggle_opts)
+        acts.addWidget(self.btn_opts)
+        rv.addWidget(wrap_hfw(acts))
+
+        # ---- 抽屉：导出选项（默认收起，点 ⚙ 展开）----
+        self.opt_drawer = QWidget()
+        tools = QHBoxLayout(self.opt_drawer)
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(8)
+        tools.addWidget(_tag(T('search.count')))
+        self.cb_top = QComboBox()
+        self.cb_top.addItems(['50', '100', '300', T('batch.all')])
+        self.cb_top.setFixedWidth(96)
+        self.cb_top.setToolTip(T('search.count_tip'))
+        tools.addWidget(self.cb_top)
+        tools.addWidget(_tag(T('search.format')))
+        self.cb_fmt = QComboBox()
+        fill_formats(self.cb_fmt, settings.get('def_format'))
+        self.cb_fmt.setMinimumWidth(150)
+        tools.addWidget(self.cb_fmt)
+        # 排序方式 —— 直接作用在当前表格上，不另开窗口
+        tools.addWidget(_tag(T('search.sort')))
+        self.cb_sort = QComboBox()
+        self.cb_sort.addItem(T('sort.hot'), 'hot')
+        self.cb_sort.addItem(T('sort.chapter'), 'chapter')
+        _si = self.cb_sort.findData(settings.get('sort_mode'))
+        if _si >= 0:
+            self.cb_sort.setCurrentIndex(_si)
+        self.cb_sort.setFixedWidth(126)
+        self.cb_sort.setToolTip(T('sort.tip'))
+        self.cb_sort.currentIndexChanged.connect(self.on_sort_changed)
+        tools.addWidget(self.cb_sort)
+        tools.addStretch(1)
+        # 「打开导出文件夹」从界面左下角搬到这里 —— 它和导出是同一个动作链上的
+        self.btn_open = QPushButton('\U0001F4C2  ' + T('search.open_dir'))
+        self.btn_open.setProperty('ghost', True)
+        self.btn_open.setCursor(Qt.PointingHandCursor)
+        self.btn_open.clicked.connect(self.win.open_export_dir)
+        tools.addWidget(self.btn_open)
+        self.opt_drawer.hide()
+        rv.addWidget(self.opt_drawer)
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels([
@@ -838,18 +849,13 @@ class SearchPage(QWidget):
         self.table.setColumnWidth(3, 80)
         rv.addWidget(self.table, 1)
 
-        # 「同类型好书」推荐区：从本次搜索的候选里挑口碑最好的几本，
-        # 点一下直接抓它；看完点上方「返回《原书名》」退回来，可反复循环。
-        self.reco_card = W.Card()
-        rc = card_layout(self.reco_card, margins=(14, 12, 14, 14), spacing=8)
-        rt = QLabel(T('search.reco'))
-        rt.setObjectName('CardTitle')
-        rc.addWidget(rt)
-        rc.addWidget(wrap_label(T('search.reco_hint'), 'Hint'))
-        self.reco_flow = W.FlowLayout(spacing=8)
-        rc.addLayout(self.reco_flow)
-        self.reco_card.hide()
-        rv.addWidget(self.reco_card)
+        # 「同类型好书」不再占右下一大块 —— 收进左侧候选框的一个按钮，
+        # 点击弹出选择窗（磊哥反馈推荐区太占空间，正文才是主角）。
+        self.btn_reco = QPushButton('\u2728  ' + T('search.reco'))
+        self.btn_reco.setProperty('flat', True)
+        self.btn_reco.setEnabled(False)
+        self.btn_reco.clicked.connect(self.show_reco_dialog)
+        lv.addWidget(self.btn_reco)
 
         split.addWidget(left)
         split.addWidget(right)
@@ -1043,14 +1049,12 @@ class SearchPage(QWidget):
         self.win.refresh_library(r['book'].get('bookId'))
 
     def _fill_reco(self, r):
-        """同类型好书：本次搜索的候选里（排除当前这本）按口碑挑 4 本。"""
+        """同类型好书：本次搜索的候选里（排除当前这本）按口碑挑 4 本。
+
+        不再铺在右下（占地方），只把列表存好 + 启用左侧的 ✨ 按钮；
+        点按钮弹出选择窗（show_reco_dialog）。
+        """
         cur_id = str((r.get('book') or {}).get('bookId') or '')
-        # 清掉旧按钮
-        while self.reco_flow.count():
-            it = self.reco_flow.takeAt(0)
-            w = it.widget()
-            if w is not None:
-                w.deleteLater()
         cands = [b for b in (self.books or [])
                  if str(b.get('bookId') or '') != cur_id]
 
@@ -1066,25 +1070,80 @@ class SearchPage(QWidget):
             return (rc, rt)
 
         cands.sort(key=quality, reverse=True)
-        show = cands[:4]
-        if not show:
-            self.reco_card.hide()
+        self._reco_books = cands[:6]
+        self.btn_reco.setEnabled(bool(self._reco_books))
+
+    def show_reco_dialog(self):
+        """「同类型好书」弹窗：带封面的列表，双击（或点按钮）直接抓。"""
+        books = getattr(self, '_reco_books', None) or []
+        if not books:
             return
-        for b in show:
-            try:
-                score = float(b.get('rating') or 0) / 10.0
-                badge = (' · %.1f' % score) if score > 0 else ''
-            except Exception:
-                badge = ''
-            if b.get('rating_label'):
-                badge += ' · %s' % b['rating_label']
-            btn = QPushButton('《%s》%s' % ((b.get('title') or '')[:18], badge))
-            btn.setProperty('flat', True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip(T('search.reco_tip', title=b.get('title') or ''))
-            btn.clicked.connect(lambda _, bb=b: self.open_reco(bb))
-            self.reco_flow.addWidget(btn)
-        self.reco_card.show()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(T('search.reco'))
+        dlg.resize(520, 480)
+        v = QVBoxLayout(dlg)
+        v.setSpacing(10)
+        tip = wrap_label(T('search.reco_hint'), 'Hint')
+        v.addWidget(tip)
+        lst = QListWidget()
+        lst.setItemDelegate(BookItemDelegate(lst))
+        lst.itemDelegate().covers = self._covers      # 共享已下载的封面
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lst.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        lst.setSpacing(2)
+        for b in books:
+            it = QListWidgetItem('')
+            it.setData(Qt.UserRole, b)
+            it.setToolTip(book_tooltip(b))
+            lst.addItem(it)
+        lst.itemDoubleClicked.connect(lambda _: btn_ok.click())
+        v.addWidget(lst, 1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        b_cancel = QPushButton('取消' if i18n.is_zh() else 'Cancel')
+        b_cancel.setProperty('flat', True)
+        b_cancel.clicked.connect(dlg.reject)
+        row.addWidget(b_cancel)
+        btn_ok = QPushButton('\U0001F4E5  ' + T('search.fetch'))
+        btn_ok.setProperty('ghost', True)
+        btn_ok.setEnabled(False)
+        row.addWidget(btn_ok)
+        v.addLayout(row)
+
+        def _pick():
+            btn_ok.setEnabled(lst.currentRow() >= 0)
+        lst.itemSelectionChanged.connect(_pick)
+
+        def _go():
+            it = lst.currentItem()
+            if it is None:
+                return
+            b = it.data(Qt.UserRole)
+            dlg.accept()
+            self.open_reco(b)
+        btn_ok.clicked.connect(_go)
+        dlg.exec()
+
+    def show_more_menu(self):
+        """「⋯ 更多」：低频操作收进菜单，可用状态跟随抓取结果。"""
+        m = QMenu(self)
+        pairs = [(self.btn_chapter, self.show_chapters),
+                 (self.btn_map, self.show_mindmap),
+                 (self.btn_ai, self.do_ai),
+                 (self.btn_queue, self.to_queue)]
+        acts = []
+        for btn, slot in pairs:
+            a = m.addAction(btn.text())
+            a.setEnabled(btn.isEnabled())
+            a.triggered.connect(slot)
+            acts.append(a)
+        m.exec(self.btn_more.mapToGlobal(self.btn_more.rect().bottomLeft()))
+
+    def toggle_opts(self):
+        """展开 / 收起「导出选项」抽屉。"""
+        vis = not self.opt_drawer.isVisible()
+        self.opt_drawer.setVisible(vis)
 
     def _on_fetch_err(self, msg):
         self.btn_fetch.setEnabled(True)
@@ -1110,6 +1169,8 @@ class SearchPage(QWidget):
         self.btn_queue.setEnabled(True)
         self.btn_copy.setEnabled(True)
         self.btn_map.setEnabled(True)
+        self.btn_more.setEnabled(True)
+        self.btn_opts.setEnabled(True)
         # 只有「抓过的书」（本地书库里真有它）才谈得上去看 AI 大纲
         self.btn_to_outline.setEnabled(bool(from_cache))
 
@@ -5363,8 +5424,8 @@ class MainWindow(QMainWindow):
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(0)
-        self.topbar = self._build_topbar()
-        rv.addWidget(self.topbar)
+        # 顶部不再放全局 TopBar（标题各页本来就有，语言/明暗/命令入口
+        # 移到了侧栏底部）—— 顶部空间省给正文（磊哥反馈页面太挤）。
 
         self.stack = W.FadeStack()
         self.page_search = SearchPage(self)
@@ -5467,6 +5528,36 @@ class MainWindow(QMainWindow):
         self.btn_open_dir.clicked.connect(self.open_export_dir)
         sv.addWidget(self.btn_open_dir)
 
+        # 全局小工具：命令面板 / 语言 / 明暗。以前占着顶部一整条 TopBar，
+        # 现在收成侧栏底部三个小圆按钮 —— 顶部空间省给正文（磊哥反馈太挤）。
+        row = QHBoxLayout()
+        row.setContentsMargins(18, 8, 18, 0)
+        row.setSpacing(8)
+        self.btn_cmd = QPushButton('\U0001F50D')
+        self.btn_cmd.setObjectName('SideTool')
+        self.btn_cmd.setFixedSize(36, 36)
+        self.btn_cmd.setCursor(Qt.PointingHandCursor)
+        self.btn_cmd.setToolTip('命令面板（Ctrl+K）')
+        self.btn_cmd.clicked.connect(self.open_palette)
+        row.addWidget(self.btn_cmd)
+        self.btn_lang = QPushButton('EN' if i18n.is_zh() else '中')
+        self.btn_lang.setObjectName('SideTool')
+        self.btn_lang.setFixedSize(36, 36)
+        self.btn_lang.setCursor(Qt.PointingHandCursor)
+        self.btn_lang.setToolTip('语言 / Language')
+        self.btn_lang.clicked.connect(self.toggle_lang)
+        row.addWidget(self.btn_lang)
+        dark = cur_mode() == 'dark'
+        self.btn_mode = QPushButton('\u2600' if dark else '\U0001F319')
+        self.btn_mode.setObjectName('SideTool')
+        self.btn_mode.setFixedSize(36, 36)
+        self.btn_mode.setCursor(Qt.PointingHandCursor)
+        self.btn_mode.setToolTip('明 / 暗')
+        self.btn_mode.clicked.connect(self.toggle_mode)
+        row.addWidget(self.btn_mode)
+        row.addStretch(1)
+        sv.addLayout(row)
+
         kbd = QLabel(T('side.command_hint'))
         kbd.setObjectName('SideKbd')
         kbd.setWordWrap(True)
@@ -5491,52 +5582,6 @@ class MainWindow(QMainWindow):
                 T('side.library_stats', books=st['books'], marks=st['marks']))
         except Exception:
             pass
-
-    def _build_topbar(self):
-        bar = QWidget()
-        bar.setObjectName('TopBar')
-        bar.setFixedHeight(58)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(20, 0, 18, 0)
-        h.setSpacing(10)
-
-        box = QVBoxLayout()
-        box.setSpacing(0)
-        self.lb_top_title = QLabel(T('nav.search'))
-        self.lb_top_title.setObjectName('TopTitle')
-        self.lb_top_sub = QLabel(T('app.tagline'))
-        self.lb_top_sub.setObjectName('TopSub')
-        box.addWidget(self.lb_top_title)
-        box.addWidget(self.lb_top_sub)
-        h.addLayout(box)
-        h.addStretch(1)
-
-        self.btn_cmd = QPushButton('\U0001F50D\u3000%s' % T('cmd.placeholder'))
-        self.btn_cmd.setObjectName('ToolBtn')
-        self.btn_cmd.setCursor(Qt.PointingHandCursor)
-        self.btn_cmd.setMinimumWidth(280)
-        self.btn_cmd.clicked.connect(self.open_palette)
-        # 「搜索下载」页有自己的搜索框，顶栏这个命令面板入口在那页是重复的
-        # （磊哥反馈像两个搜索按钮）→ 该页隐藏，其余页显示；Ctrl+K 始终可用。
-        self.btn_cmd.setVisible(False)
-        h.addWidget(self.btn_cmd)
-
-        self.btn_lang = QPushButton('EN' if i18n.is_zh() else '中')
-        self.btn_lang.setObjectName('ToolBtn')
-        self.btn_lang.setFixedWidth(52)
-        self.btn_lang.setCursor(Qt.PointingHandCursor)
-        self.btn_lang.setToolTip('语言 / Language')
-        self.btn_lang.clicked.connect(self.toggle_lang)
-        h.addWidget(self.btn_lang)
-
-        dark = cur_mode() == 'dark'
-        self.btn_mode = QPushButton('\u2600' if dark else '\U0001F319')
-        self.btn_mode.setObjectName('ToolBtn')
-        self.btn_mode.setFixedWidth(52)
-        self.btn_mode.setCursor(Qt.PointingHandCursor)
-        self.btn_mode.clicked.connect(self.toggle_mode)
-        h.addWidget(self.btn_mode)
-        return bar
 
     # ------------------------------------------------------------------
     # 主题与重建
@@ -5691,10 +5736,9 @@ class MainWindow(QMainWindow):
     # 专注模式 / 入场动效 / 无边框缩放
     # ------------------------------------------------------------------
     def toggle_focus(self):
-        """一键隐藏侧栏与顶栏，只剩正文 —— 阅读时视野干净很多。"""
+        """一键隐藏侧栏，只剩正文 —— 阅读时视野干净很多。"""
         self._focus = not getattr(self, '_focus', False)
         self.sidebar.setVisible(not self._focus)
-        self.topbar.setVisible(not self._focus)
         if self.titlebar is not None:
             self.titlebar.setVisible(not self._focus)
         self.toast(T('focus.on') if self._focus else T('focus.off'),
@@ -5833,12 +5877,6 @@ class MainWindow(QMainWindow):
         btn = self.nav_group.button(idx)
         if btn and not btn.isChecked():
             btn.setChecked(True)
-        titles = ['nav.search', 'nav.batch', 'nav.library', 'nav.insight',
-                  'nav.outline', 'nav.exports', 'nav.settings']
-        if 0 <= idx < len(titles):
-            self.lb_top_title.setText(T(titles[idx]))
-        # 命令面板入口在「搜索下载」页与页面内搜索框重复 → 那页隐藏
-        self.btn_cmd.setVisible(idx != 0)
         self._update_side()
         QTimer.singleShot(70, lambda: self.stagger_in(self.stack.widget(idx)))
         if idx == 2:

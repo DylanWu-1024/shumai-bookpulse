@@ -128,6 +128,7 @@ def palette(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12, glass=True):
         'PRIMARY': acc['p'], 'PRIMARY_D': acc['pd'], 'PRIMARY_L': acc['pl'],
         'PRIMARY_SOFT': acc['soft'], 'ACCENT': acc['acc'],
         'RADIUS': radius,
+        'RADIUS_LG': radius + 10,       # 悬浮胶囊卡用的大圆角
     })
     # 深色模式下主色浅底要压暗，否则浅色块在暗背景上会刺眼
     if mode == 'dark':
@@ -192,6 +193,13 @@ _QSS_TEMPLATE = """
 }
 #SideOpen:hover { background: %(PRIMARY)s; }
 #SideKbd { color: %(side_muted)s; font-size: 10.5px; padding: 0 18px 16px 18px; }
+/* 侧栏底部的三个小圆按钮（命令面板 / 语言 / 明暗）—— 替代旧 TopBar */
+#SideTool {
+    color: %(side_text)s; background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 18px;
+    font-size: 14px; font-weight: 600;
+}
+#SideTool:hover { background: %(PRIMARY)s; color: #FFFFFF; border-color: %(PRIMARY)s; }
 
 /* ------------------------------------------------------------ 顶栏（工具栏） */
 #TopBar { background: %(card_glass)s; border-bottom: 1px solid %(line)s; }
@@ -238,6 +246,12 @@ _QSS_TEMPLATE = """
 #Card { background: %(card_glass)s; border: 1px solid %(line)s; border-top: 1px solid %(card_hi)s; border-radius: %(RADIUS)spx; }
 #CardFlat { background: %(hover)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
 #CardHover { background: %(card_glass)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
+/* 悬浮「胶囊卡」：比普通卡片更大的圆角 + 顶部高光 —— 配合更深的阴影，像浮在底面上 */
+#FloatCard {
+    background: %(card_glass)s;
+    border: 1px solid %(line)s; border-top: 1px solid %(card_hi)s;
+    border-radius: %(RADIUS_LG)spx;
+}
 #CardHover:hover { border: 1px solid %(border_hl)s; }
 
 /* ------------------------------------------------------------ 输入控件 */
@@ -318,6 +332,11 @@ QTableWidget { gridline-color: %(grid)s; }
 QTableWidget::item { padding: 6px 8px; }
 QTableWidget::item:hover { background: %(hover)s; }
 QTableWidget::item:selected { background: %(PRIMARY_SOFT)s; color: %(PRIMARY_D)s; }
+/* 划线正文用仿宋 —— 书里的话配书卷气（磊哥提议），标题/控件仍是黑体系 */
+QTableWidget, QTextBrowser {
+    font-family: "FangSong", "仿宋", "FangSong_GB2312", "Microsoft YaHei UI", serif;
+    font-size: 15px;
+}
 QHeaderView::section {
     background: %(head)s; color: %(muted)s; border: 0;
     border-bottom: 1px solid %(line)s; padding: 9px 8px;
