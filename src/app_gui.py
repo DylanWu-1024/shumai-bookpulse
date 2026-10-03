@@ -137,7 +137,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.3'
+APP_VERSION = '2.4'
 
 
 # ==========================================================================
@@ -3170,24 +3170,23 @@ class InsightPage(QWidget):
 # 页面 4.6：AI 大纲（每章的 AI 要点，需要登录态）
 # ==========================================================================
 class OutlineWorker(QThread):
-    """取一本书的 AI 大纲：先问结构，再分批取正文。
+    """取一本书的 AI 大纲（整本，含正文）。**不需要登录**。
 
-    两个接口（2026-10-02 实测）：
-      POST /web/book/outline/check  → 章节结构 + 每章有没有要点（**免登录**）
-      POST /web/book/outline/inner  → 要点正文（**必须登录态**，不带 Cookie 返回 403）
+    2026-10-03 用真实浏览器复现请求后找到正主：
+      POST /web/book/outline  {"bookId": "...", "chapterUids": [2,3,…,125]}
+      → 200，一次拿回整本。
 
-    为什么分批取正文：一本可能有上百章带要点（实测《短线交易秘诀》122 章），
-    一次全塞进请求体不合适，也更容易触发风控。每批 12 章、批间随机停顿。
-    单批失败不中断整体 —— 能拿到多少算多少，最后把最后一次错误一起报上来。
+    在此之前一直用 `/web/book/outline/inner`（恒 403，带有效 Cookie 也一样），
+    绕了很久 —— 那个接口不是浏览器实际调用的。
+
+    只发两次请求：check 拿章节列表 → outline 一次拿全部内容。
     """
     stage = Signal(str)
     progress = Signal(int, int)
-    done = Signal(dict, list, str)      # {uid: [文本]}, 章节列表, 最后一次错误
+    done = Signal(list, list, str)      # 解析后的树, 章节列表, 错误
     fail = Signal(str)
 
-    BATCH = 12
-
-    def __init__(self, book_id, cookie, parent=None):
+    def __init__(self, book_id, cookie='', parent=None):
         super().__init__(parent)
         self.book_id = str(book_id)
         self.cookie = cookie or ''
@@ -3199,30 +3198,21 @@ class OutlineWorker(QThread):
     def run(self):
         try:
             self.stage.emit('check')
-            chapters = core.fetch_outline_chapters(self.book_id, cookie=self.cookie)
-            uids = [int(c.get('chapterUid')) for c in chapters
-                    if c.get('chapterUid') is not None and c.get('hasKeyPoint') == 1]
-
-            text_map, last_err, total = {}, '', len(uids)
-            for i in range(0, total, self.BATCH):
-                if self._stop:
-                    break
-                chunk = uids[i:i + self.BATCH]
-                try:
-                    raw = core.fetch_outline_content(self.book_id, chunk,
-                                                     cookie=self.cookie, retries=1)
-                    for k, v in (core.outline_parse(raw) or {}).items():
-                        try:
-                            text_map[int(k)] = v
-                        except (TypeError, ValueError):
-                            pass
-                except Exception as e:
-                    last_err = str(e)
-                self.progress.emit(min(i + len(chunk), total), total)
-                if i + self.BATCH < total and not self._stop:
-                    time.sleep(random.uniform(0.6, 1.4))
-
-            self.done.emit(text_map, chapters, last_err)
+            chapters = core.fetch_outline_chapters(self.book_id,
+                                                   cookie=self.cookie)
+            if self._stop:
+                return
+            uids = [c.get('chapterUid') for c in chapters
+                    if c.get('chapterUid') is not None]
+            self.stage.emit('content')
+            self.progress.emit(0, max(1, len(uids)))
+            raw = core.fetch_outline_all(self.book_id, uids,
+                                         cookie=self.cookie)
+            if self._stop:
+                return
+            tree = core.outline_tree(raw)
+            self.progress.emit(len(uids), max(1, len(uids)))
+            self.done.emit(tree, chapters, '')
         except Exception as e:
             self.fail.emit(str(e))
 
@@ -3234,8 +3224,9 @@ class OutlinePage(QWidget):
         super().__init__()
         self.win = win
         self.worker = None
-        self.chapters = []
-        self.by_uid = {}
+        self.chapters = []      # check 给的章节列表（含书内顺序）
+        self.tree = []          # /web/book/outline 解析后的树
+        self.by_uid = {}        # chapterUid → 该章的节点
         self.book_title = ''
         self._build()
 
@@ -3385,22 +3376,26 @@ class OutlinePage(QWidget):
 
     # ------------------------------------------------------------------ 抓取
     def do_fetch(self):
+        """抓整本书的 AI 大纲。
+
+        2026-10-03 实测修正：`POST /web/book/outline` **不需要登录**，
+        发一次请求就能拿回整本（《短线交易秘诀》122 章 / 2035 条）。
+        所以这里**不再要求先填 Cookie** —— 之前「必须先登录」的限制是我搞错了接口。
+        """
         if self.worker and self.worker.isRunning():
-            return
-        if not self._cookie():
-            self.win.toast(T('outline.need_cookie'), kind='warn', hold=4600)
             return
         bid = self.cb_book.currentData()
         if not bid:
+            self.win.toast(T('outline.pick'), kind='warn')
             return
 
-        self.book_title = (self.cb_book.currentText() or '').strip('《》 ')
+        self.book_title = (self._current_book()[1] or '').strip()
         self.btn_fetch.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.lb_state.setText(T('outline.loading'))
         self.list.clear()
         self.ed.setPlainText('')
-        self.chapters, self.by_uid = [], {}
+        self.chapters, self.tree, self.by_uid = [], [], {}
         self.empty.hide()
 
         self.worker = OutlineWorker(str(bid), self._cookie(), self)
@@ -3428,29 +3423,56 @@ class OutlinePage(QWidget):
         self.lb_state.setText('')
         QMessageBox.warning(self, T('outline.title'), msg)
 
-    def _on_done(self, text_map, chapters, last_err):
+    def _ordered_nodes(self):
+        """按**书里的顺序**返回有内容的章节节点。"""
+        order = [c.get('chapterUid') for c in self.chapters]
+        seen, seq = set(), []
+        for uid in order:
+            if uid in self.by_uid and uid not in seen:
+                seq.append(uid)
+                seen.add(uid)
+        for node in self.tree:          # check 里没有的，补在后面
+            uid = node.get('chapterUid')
+            if uid not in seen:
+                seq.append(uid)
+                seen.add(uid)
+        return [self.by_uid[u] for u in seq]
+
+    def _on_done(self, tree, chapters, last_err):
         self.btn_fetch.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.by_uid = text_map or {}
         self.chapters = chapters or []
+        self.tree = tree or []
+        self.by_uid = {n.get('chapterUid'): n for n in self.tree}
 
-        n_has = sum(1 for c in self.chapters if c.get('hasKeyPoint') == 1)
-        n_got = len(self.by_uid)
-        chars = sum(len('\n'.join(v)) for v in self.by_uid.values())
+        n_ch = len(self.tree)
+        n_items = sum(len(n['items']) for n in self.tree)
+        chars = sum(len(''.join(i['text'] for i in n['items'])) for n in self.tree)
 
+        # 左侧列表：按 check 给的章节顺序排；有内容的打 ●，没有的灰掉
         self.list.clear()
+        shown = set()
         for c in self.chapters:
             uid = c.get('chapterUid')
-            mark = '\u25CF ' if c.get('hasKeyPoint') == 1 else '   '
+            node = self.by_uid.get(uid)
             lvl = c.get('level') or 1
             pad = '    ' * max(0, min(2, int(lvl) - 1))
-            it = QListWidgetItem('%s%s%s' % (mark, pad, c.get('text') or ''))
+            it = QListWidgetItem('%s%s%s' % ('● ' if node else '   ', pad,
+                                             c.get('text') or ''))
             it.setData(Qt.UserRole, uid)
-            if c.get('hasKeyPoint') != 1:
+            if not node:
                 it.setForeground(QColor('#A0A0B8'))
             self.list.addItem(it)
+            shown.add(uid)
+        for node in self.tree:
+            uid = node.get('chapterUid')
+            if uid in shown:
+                continue
+            it = QListWidgetItem('● %s' % core.outline_chapter_title(node))
+            it.setData(Qt.UserRole, uid)
+            self.list.addItem(it)
 
-        if n_has == 0:
+        if n_ch == 0:
             self.empty.show()
             self.lb_state.setText('')
             self.btn_copy_all.setEnabled(False)
@@ -3460,21 +3482,19 @@ class OutlinePage(QWidget):
             return
 
         self.empty.hide()
-        # 说明白「有几章有要点」+「实际取到几章」—— 这两件事必须分开讲，
-        # 否则用户会误以为是程序坏了（其实是有要点但登录态没通过）
-        base = T('outline.summary', n=n_has, chars=core.num_fmt(chars))
-        if n_got == 0:
-            msg = T('outline.has_but_none', total=len(self.chapters), n=n_has)
-            self.win.toast(T('outline.has_but_none_short'), kind='warn', hold=7200)
-        elif n_got < n_has:
-            msg = base + ' · ' + T('outline.partial', got=n_got, n=n_has, miss=n_has - n_got)
-        else:
-            msg = base
-        self.lb_state.setText(msg)
-        self.btn_copy_all.setEnabled(bool(self.by_uid))
-        self.btn_export.setEnabled(bool(self.by_uid))
-        if last_err and n_got < n_has:
-            print('[OutlinePage] 抓取失败: %s' % last_err, file=sys.stderr)
+        self.lb_state.setText(T('outline.summary', n=n_ch, chars=core.num_fmt(chars)))
+        self.btn_copy_all.setEnabled(True)
+        self.btn_export.setEnabled(True)
+        self.win.toast(T('outline.got_ok', n=n_ch, items=n_items),
+                       kind='ok', hold=4600)
+        if last_err:
+            print('[OutlinePage] 抓取出错: %s' % last_err, file=sys.stderr)
+
+        # 自动选中第一个有内容的章节，省一次点击
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole) in self.by_uid:
+                self.list.setCurrentRow(i)
+                break
 
     # ------------------------------------------------------------------ 交互
     def on_pick(self, row):
@@ -3487,39 +3507,25 @@ class OutlinePage(QWidget):
         try:
             uid = int(uid)
         except (TypeError, ValueError):
-            uid = None
-        parts = self.by_uid.get(uid) or []
-        name = (it.text() or '').strip('\u25CF ')
-        if parts:
-            self.ed.setPlainText('【%s】\n\n%s' % (name, '\n\n'.join(parts)))
+            pass
+        node = self.by_uid.get(uid)
+        name = (it.text() or '').strip('\u25CF ').strip()
+        if node:
+            self.ed.setPlainText('【%s】\n\n%s' % (
+                core.outline_chapter_title(node) or name,
+                core.outline_chapter_text(node, with_title=False)))
         else:
             self.ed.setPlainText('【%s】\n\n%s' % (name, T('outline.none')))
-        self.btn_copy.setEnabled(bool(parts))
+        self.btn_copy.setEnabled(bool(node))
 
-    def _chapter_blocks(self):
-        """把已取到的大纲拼成「章名 + 要点」的文本块列表。"""
-        name_of = {}
-        for c in self.chapters:
-            name_of[c.get('chapterUid')] = c.get('text') or ''
-        blocks = []
-        for c in self.chapters:
-            uid = c.get('chapterUid')
-            if c.get('hasKeyPoint') != 1:
-                continue
-            parts = self.by_uid.get(uid)
-            if not parts:
-                continue
-            try:
-                uid_i = int(uid)
-            except (TypeError, ValueError):
-                uid_i = uid
-            parts = self.by_uid.get(uid_i) or parts
-            blocks.append('## %s\n\n%s' % (name_of.get(uid, ''), '\n\n'.join(parts)))
-        return blocks
+    def _md_blocks(self):
+        """已取到的章节 → [(章名, Markdown 片段)]，保持书内顺序。"""
+        return [(core.outline_chapter_title(n), core.outline_chapter_md(n))
+                for n in self._ordered_nodes()]
 
     def _full_text(self):
         head = '# 《%s》· AI 大纲\n' % self.book_title
-        return head + '\n\n'.join(self._chapter_blocks())
+        return head + '\n\n'.join(md for _, md in self._md_blocks())
 
     def copy_chapter(self):
         t = self.ed.toPlainText()
@@ -3539,17 +3545,26 @@ class OutlinePage(QWidget):
     def _render_text(self, ext):
         """把大纲渲染成 md / txt / html —— 三种覆盖了常见去向。"""
         title = self.book_title
-        blocks = self._chapter_blocks()
 
         if ext == '.html':
             secs = []
-            for b in blocks:
-                lines = b.split('\n')
-                name = lines[0].replace('## ', '').strip()
-                body = [l for l in lines[1:] if l.strip()]
+            for name, md in self._md_blocks():
+                body = []
+                for line in md.split('\n'):
+                    s = line.rstrip()
+                    if not s.strip() or s.lstrip().startswith('#'):
+                        continue            # 章标题单独渲染，正文里跳过
+                    t = s.strip()
+                    if t.startswith('  - '):
+                        body.append('<p class="l4">%s</p>' % core.esc(t[4:]))
+                    elif t.startswith('- '):
+                        body.append('<p class="l3">%s</p>' % core.esc(t[2:]))
+                    elif t.startswith('**') and t.endswith('**'):
+                        body.append('<p class="l2">%s</p>' % core.esc(t.strip('*')))
+                    else:
+                        body.append('<p>%s</p>' % core.esc(t))
                 secs.append('<section><h2>%s</h2>%s</section>'
-                            % (core.esc(name),
-                               ''.join('<p>%s</p>' % core.esc(p) for p in body)))
+                            % (core.esc(name), ''.join(body)))
             return (
                 '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -3563,17 +3578,19 @@ class OutlinePage(QWidget):
                 'margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.05)}'
                 'section h2{margin:0 0 10px;font-size:16px;color:#4C1D95}'
                 'section p{margin:6px 0;font-size:15.5px;line-height:1.9}'
+                'section p.l2{font-weight:600;color:#312E81;margin-top:14px}'
+                'section p.l3{padding-left:4px}'
+                'section p.l4{padding-left:22px;color:#555;font-size:14.5px}'
                 '</style></head><body><header><h1>《%s》· AI 大纲</h1></header>'
                 '<main>%s</main></body></html>'
                 % (core.esc(title), core.esc(title), ''.join(secs)))
 
         if ext == '.txt':
             out = ['《%s》· AI 大纲' % title, '']
-            for b in blocks:
-                lines = b.split('\n')
-                out.append(lines[0].replace('## ', '').strip())
+            for node in self._ordered_nodes():
+                out.append(core.outline_chapter_title(node))
                 out.append('')
-                out.extend(l for l in lines[1:] if l.strip())
+                out.append(core.outline_chapter_text(node, with_title=False))
                 out.append('')
             return '\n'.join(out)
 
@@ -3581,8 +3598,7 @@ class OutlinePage(QWidget):
 
     def do_export(self):
         """导出大纲：Markdown / 纯文本 / 网页，任选。"""
-        blocks = self._chapter_blocks()
-        if not blocks:
+        if not self._md_blocks():
             return
         default = os.path.join(
             export_dir(), '《%s》AI大纲-%s.md'
@@ -4518,10 +4534,12 @@ class SettingsPage(QWidget):
         self._sync_cookie_keys()
 
     def on_test_cookie(self):
-        """测一次：拿本地书库里的书试 outline/check + inner，确认登录态真的有效。
+        """验证 Cookie 是否有效。
 
-        这一步很关键 —— 因为不同书的 AI 大纲覆盖差别很大（《活着》整本都没有），
-        所以要在书库里找一本「确实有要点」的来验证，才能说明 Cookie 是有效的。
+        ⚠️ 判据用的是**阅读页 SSR 里的 user.vid**，不是 outline 接口 ——
+        因为 AI 大纲接口根本不需要登录（实测），拿它当判据会得出错误结论。
+        带有效 Cookie 时，阅读页的 `window.__INITIAL_STATE__` 里会出现
+        `user.vid`（你的用户 ID）与 `reader.token`，页面体积也会明显变大。
         """
         ck = (self.ed_cookie.text() or '').strip()
         if not ck:
@@ -4530,33 +4548,21 @@ class SettingsPage(QWidget):
         self.lb_cookie_state.setText(T('outline.loading'))
         QApplication.processEvents()
         try:
-            books = self.win.kb.books() or []
-            if not books:
-                self.lb_cookie_state.setText(
-                    T('set.cookie_fail', msg='本地书库是空的，先抓一本书'))
-                return
-            for b in books[:3]:
-                chs = core.fetch_outline_chapters(b['book_id'], cookie=ck)
-                has = [c for c in chs if c.get('hasKeyPoint') == 1]
-                if not has:
-                    continue
-                raw = core.fetch_outline_content(b['book_id'],
-                                                 [has[0]['chapterUid']], cookie=ck)
-                got = core.outline_parse(raw)
-                self.lb_cookie_state.setText(
-                    T('set.cookie_ok', title=b['title'], n=len(has)))
-                if got:
-                    self.win.toast('登录态有效：已取到 %d 章内容' % len(got),
-                                   kind='ok', hold=3600)
-                else:
-                    self.win.toast('接口通了，但没解析出内容（返回结构可能变了）',
-                                   kind='warn', hold=4600)
-                return
-            self.lb_cookie_state.setText(
-                T('set.cookie_ok', title=books[0]['title'], n=0)
-                + '（这几本都没有 AI 大纲，换一本有要点的再试）')
+            r = core.check_login(ck)
         except Exception as e:
             self.lb_cookie_state.setText(T('set.cookie_fail', msg=str(e)[:70]))
+            return
+        if r.get('ok'):
+            who = r.get('nick') or r.get('vid')
+            self.lb_cookie_state.setText(
+                T('set.cookie_ok_plain', who=who, vid=r.get('vid')))
+            self.win.toast(T('set.cookie_ok_plain', who=who, vid=r.get('vid')),
+                           kind='ok', hold=4600)
+        else:
+            self.lb_cookie_state.setText(
+                T('set.cookie_fail', msg=r.get('note') or '登录态无效'))
+            self.win.toast(T('set.cookie_fail', msg=r.get('note') or '登录态无效'),
+                           kind='warn', hold=5200)
 
     def on_titlebar(self, state):
         if self._loading:

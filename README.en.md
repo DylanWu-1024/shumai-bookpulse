@@ -289,25 +289,27 @@ Result: **45 MB** single-file build, **113 MB** onedir build, fastest launch **5
 
 <details>
 <details>
-<summary><b>What is AI Outline, and why does it need a sign-in?</b></summary>
+<summary><b>What is AI Outline? Does it need a sign-in?</b></summary>
 
-WeRead generates **per-chapter AI key points** for many books (the "AI Outline" feature you see in the app). It is a separate data source from popular highlights, so this project gives it its own page.
+WeRead generates **per-chapter AI key points** for many books. It is a separate data source from popular highlights, so this project gives it its own page.
 
-Measured (2026-10-02):
+**No sign-in is needed.** This corrects an earlier claim of mine:
 
-- `POST /web/book/outline/check` — chapter structure + which chapters have key points, **no sign-in needed**
-- `POST /web/book/outline/inner` — the actual key-point text, **requires sign-in**; returns `HTTP 403` without a Cookie
+| Endpoint | Purpose | Measured |
+|---|---|---|
+| `POST /web/book/outline/check` | chapter structure | ✅ no sign-in |
+| `POST /web/book/outline/inner` | ~~key-point text~~ | ❌ **always 403**, even with a valid cookie (not what the browser actually calls) |
+| **`POST /web/book/outline`** | **key-point text (the real one)** | ✅ **no sign-in**, returns the whole book in one call |
 
-So Settings has a "WeRead sign-in": just paste the Cookie from your browser.
+This was confirmed by **reproducing the request in a real browser (Playwright, signed in)** and reading off the actual call. The earlier detour came from hammering the 403 endpoint.
 
-**Where to copy from (most reliable)**: `F12` → **Network** tab → click any request → in **Request Headers**, right-click the `Cookie` row → **Copy value**.
-(Avoid `copy(document.cookie)` — cookies marked HttpOnly are invisible to JS, and `wr_skey` usually is one of them. Or use **Copy → Copy as cURL**, which is also accepted.)
+Measured with no cookies at all: 短线交易秘诀 122 chapters / 2035 items, 裸K线技术分析与交易 38 / 861, 一地鸡毛 8 / 539, 活着 10 / 233. One request per book, 1–2 s.
 
-Many paste formats are understood: plain cookie string, a full Request Headers block, the Application panel table, `name: value`, Copy as cURL, and JSON exports — with `Path` / `Domain` etc. stripped automatically.
+Settings still has a "WeRead sign-in" field, now marked **optional / no longer needed**, kept for possible future endpoints.
 
-**Only this one feature sends it** — highlight fetching never does. The cookie stays in your local `data/settings.json`.
+⚠️ Also **do not use `check`'s `hasKeyPoint` to decide whether a book has an outline**: it reads 0 for 活着, yet 10 chapters of content come back. Trust the `items` in the outline response.
 
-Also set your expectations: **not every book has an AI outline.** 活着 has none across all 13 chapters; 短线交易秘诀 has key points in 122 of 125 chapters. The app tells you which case you're in.
+**Not every book has an AI outline** — that is up to WeRead. The app tells you the result explicitly. The chapter list, however, is always available.
 
 </details>
 

@@ -81,6 +81,16 @@
   <span class="pill">Chrome / Edge / 新版 Edge 内核浏览器</span>
 </header>
 
+<div class="box ok" style="font-size:15px">
+  <b>📌 更新（2026-10-03）：这份教程现在<u>用不上了</u> —— AI 大纲已经不需要登录。</b><br><br>
+  我用真实浏览器把请求原样抓出来复现后确认：程序之前调的
+  <code>/web/book/outline/inner</code> 是个<b>恒返回 403 的接口</b>（带着有效 Cookie 也一样），
+  而浏览器真正调用的是 <code>POST /web/book/outline</code> —— <b>它不需要登录</b>。<br><br>
+  实测不带任何 Cookie：《短线交易秘诀》122 章 / 2035 条、《活着》10 章 / 233 条，
+  全部 200。<b>现在选一本书直接点「获取 AI 大纲」就行。</b><br><br>
+  下面这份教程保留着，万一以后有别的接口需要登录，还能照着做。
+</div>
+
 <div class="box tip">
   <b>先说清楚：Cookie 是什么、为什么要它？</b><br>
   Cookie 是浏览器登录后拿到的一小段「通行证」。带上它，微信读书才知道「是你本人」。

@@ -151,40 +151,27 @@ footer{text-align:center;color:#9A99B8;font-size:12.5px;padding:30px 20px 44px}
 </div>
 
 <div class="warn">
-<b>「AI 大纲」为什么要填 Cookie？</b><br>
-微信读书的 AI 大纲<b>正文接口必须带登录态</b>才会返回（不带会直接 403）。
-所以设置里有一项「微信读书登录」：把浏览器的 Cookie 粘进去即可。
-<b>只有这一项功能会带上它</b> —— 抓热门划线始终不带 Cookie，Cookie 也只存在你自己电脑上。<br><br>
-<b>怎么把 Cookie 交给程序（一次搞定，之后长期有效，通常管数周到数月）：</b><br>
-<span style="display:inline-block;margin:6px 0 8px;padding:5px 12px;background:#F1F0FB;border-radius:8px;font-size:14px">📘 嫌下面步骤多？看这份带图详解：<b>同目录下的《如何获取Cookie.html》</b>，双击用浏览器打开即可</span>
-<ol style="margin:8px 0 8px 18px;line-height:1.9">
-  <li>在程序里点 <b>设置 → 微信读书登录 → 「打开微信读书（去登录）」</b>，
-      用它打开的页面<b>登录你的微信读书账号</b>（这一步只是登录，不是把密码交给程序）。</li>
-  <li>在那个网页上按 <kbd>F12</kbd>，切到 <b>Network / 网络</b> 标签，刷新一下页面，
-      然后<b>随便点其中一条请求</b>。</li>
-  <li>在右侧找到 <b>Request Headers / 请求标头</b> 里的 <code>Cookie</code> 那一行
-      （如果没看到，点一下 <b>「展开」/ Raw</b>）。
-      <b>在那一行上右键 → Copy value（复制值）</b>。</li>
-  <li>回到程序，点 <b>「从剪贴板粘贴」</b> → 点 <b>「测试连接」</b>。
-      程序会显示<b>识别到哪些字段</b>（正常应有 <code>wr_vid</code> 和 <code>wr_skey</code>），
-      并自动拿一本有要点的书实测一次，直接告诉你成不成。</li>
-</ol>
-<div style="margin:6px 0 10px;padding:10px 12px;background:#F1F0FB;border-radius:10px;font-size:14px">
-<b>为什么推荐从 Network 复制，而不是从 Application 面板拼？</b><br>
-Application 面板里那些 Cookie <b>标了 HttpOnly 的，JavaScript 读不到</b>
-（比如 <code>wr_skey</code> 常常就是），所以用
-<code>copy(document.cookie)</code> 这类办法<b>可能拿不全</b>；
-而 Network 里的请求头是<b>浏览器真正发出去的完整内容</b>，最保险。<br><br>
-<b>另一个同样省事的办法：</b>在 Network 里右键那条请求 →
-<b>Copy → Copy as cURL</b>，然后回程序点「从剪贴板粘贴」。程序也认这一整段。<br><br>
-<b>程序认得这些形态，你复制成什么样都行：</b>
-标准串（<code>名字=值; 名字=值</code>）、整段 Request Headers、
-Application 表格（Tab 分隔的多行）、<code>名字: 值</code>、
-Copy as cURL、插件导出的 JSON。<code>Path</code>、<code>Domain</code>、<code>Secure</code>
-这些属性会自动丢掉。<br>
-<b>万一复制错了地方</b>（比如粘成了响应头），程序会直接提示「没识别到关键字段」，
-不会拿着错东西去请求。
-</div>
+<b>「AI 大纲」需要登录吗？—— 不需要了（重要更正）</b><br>
+<p style="margin:8px 0">早期版本我说过「AI 大纲正文必须登录、要填 Cookie」，
+<b>这个说法是错的</b>，向你道歉。后来我用真实浏览器把请求抓出来复现，发现
+程序当时调的是 <code>/web/book/outline/<b>inner</b></code> —— 那个接口<b>恒返回 403</b>，
+带着有效 Cookie 也一样；而浏览器实际调用的是
+<code>POST /web/book/outline</code>，<b>这个接口根本不需要登录</b>。</p>
+<p style="margin:8px 0"><b>实测证据</b>（全部不带 Cookie）：</p>
+<ul style="margin:6px 0 6px 18px;line-height:1.9">
+  <li>《短线交易秘诀》→ 122 章有要点，2035 条</li>
+  <li>《裸K线技术分析与交易》→ 38 章，861 条</li>
+  <li>《活着》→ 10 章，233 条</li>
+  <li>《一地鸡毛》→ 8 章，539 条</li>
+</ul>
+<p style="margin:8px 0"><b>所以你什么都不用填 —— 选一本书，直接点「获取 AI 大纲」就行。</b>
+整本一次请求拿回（实测 1~2 秒）。</p>
+<p style="margin:8px 0">设置里那个「微信读书登录」我保留着，但已经标注<b>「可选 · 已不需要」</b>，
+留给将来万一有别的接口需要登录时再用。你已经填了的话，留着也无害。</p>
+<p style="margin:8px 0;color:#8B8AAE;font-size:14px">顺带说明「为什么有些书没有 AI 大纲」：
+这是微信读书那边决定的，程序没法改变。程序会明确告诉你结果
+（例如「共 13 章 · 0 章有要点」）。另外 <b>「章节列表」永远是能拿到的</b> ——
+哪几章有大纲，不看登录也一清二楚。</p>
 <b>为什么不能像 QQ 那样在程序里扫码？</b><br>
 因为微信读书的二维码是<b>微信官方</b>生成的，扫码后微信把登录凭据回调给
 <code>weread.qq.com</code> —— 这个回调<b>只会送到浏览器</b>，我们的程序在纯网络层面收不到它，

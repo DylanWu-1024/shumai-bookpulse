@@ -310,88 +310,223 @@ def post_json(url, payload, cookie='', timeout=None, retries=None):
 # AI 大纲（书里每章的总结性要点，需要登录态）
 # --------------------------------------------------------------------------
 API_OUTLINE_CHECK = 'https://weread.qq.com/web/book/outline/check'
+# ⚠️ outline/inner 是**另一个**接口，实测恒返回 403（带有效 Cookie 也一样），已弃用。
+# 真正能用的是下面这个 outline。
 API_OUTLINE_INNER = 'https://weread.qq.com/web/book/outline/inner'
+# ★ 2026-10-03 用真实浏览器（Playwright + 用户 Cookie）复现请求后发现的正主：
+#   POST /web/book/outline  {"bookId": "...", "chapterUids": [2,3,...,125]}
+#   → 200，一次性返回整本的 AI 大纲正文，且【不需要登录】。
+API_OUTLINE = 'https://weread.qq.com/web/book/outline'
 
 
 def fetch_outline_chapters(book_id, cookie='', timeout=None):
-    """章节结构 + 每章有没有 AI 要点。
+    """章节结构 + 每章的书内顺序。
 
-    实测（2026-10-02）：`POST /web/book/outline/check` **不带 Cookie 也返回 200**，
+    实测：`POST /web/book/outline/check` **不带 Cookie 也返回 200**，
     内容是 chapterInfos 数组，每项形如：
         {"text": "第1章 …", "chapterUid": 4, "level": 1,
          "hasKeyPoint": 1, "version": 30012}
-    `hasKeyPoint == 1` 表示这一章有 AI 大纲（-1 表示没有）。
 
-    另外实测：**不是每本书都有 AI 大纲** ——《活着》13 章无一章有要点，
-    《短线交易秘诀》则有多章。所以「有没有」这件事本身也得靠这个接口问。
+    ⚠️ **别用 `hasKeyPoint` 判断「这本书有没有 AI 大纲」**（踩过）：
+    《活着》这个字段是 0/-1，但 `fetch_outline_all` 实际能取回 10 章内容；
+    《人类简史》同理。判断有没有，要看 outline 接口回来有没有 items。
     """
     data = post_json(API_OUTLINE_CHECK, {'bookId': str(book_id)},
                      cookie=cookie, timeout=timeout)
     return data.get('chapterInfos') or []
 
 
-def fetch_outline_content(book_id, chapter_uids, cookie='', timeout=None):
-    """取指定章节的 AI 大纲正文（这是需要登录的那一步）。
+def fetch_outline_all(book_id, chapter_uids=None, cookie='', timeout=None,
+                      retries=None):
+    """抓整本书的 AI 大纲（含正文）。**不需要登录**。
 
-    实测要点：
-      · 必须 **POST**（GET 一律 404）
-      · 参数必须是 `{"bookId": "...", "chapterUids": [4]}` —— chapterUids 是**数组**
-      · 不带登录态会返回 HTTP 403
+    参数
+      chapter_uids: 要抓哪些章；不给就先调 check 拿全部章节。
+    返回
+      原始 JSON dict（含 itemsArray），交给 outline_tree() 解析。
+
+    为什么要一次把章节号都带上：这是浏览器里的真实行为 ——
+    JS 发的就是 `{"bookId":..., "chapterUids":[2,3,...,125]}`，
+    一次请求拿回整本。比自己分批循环更快、请求数更少（对风控也友好）。
     """
-    uids = [int(u) for u in (chapter_uids or [])]
+    uids = [int(u) for u in (chapter_uids or []) if str(u).strip()]
     if not uids:
-        return {}
-    if not cookie:
-        raise WereadError('取 AI 大纲需要登录态：请到「设置 → 微信读书登录」填入 Cookie')
-    return post_json(API_OUTLINE_INNER,
+        chs = fetch_outline_chapters(book_id, cookie=cookie, timeout=timeout)
+        uids = [int(c['chapterUid']) for c in chs
+                if c.get('chapterUid') is not None]
+    if not uids:
+        return {'itemsArray': []}
+    return post_json(API_OUTLINE,
                      {'bookId': str(book_id), 'chapterUids': uids},
-                     cookie=cookie, timeout=timeout)
+                     cookie=cookie, timeout=timeout, retries=retries)
 
 
-_OUTLINE_TEXT_KEYS = ('keyPoint', 'keyPoints', 'items', 'itemArray',
-                      'content', 'text', 'outline', 'points', 'summary')
+def outline_tree(raw):
+    """把 /web/book/outline 的返回解析成结构化树。
 
-
-def outline_parse(data):
-    """把 outline/inner 的返回宽松解析成 {chapterUid: [文本, …]}。
-
-    官方没有公开返回结构，所以这里不写死字段名 —— 递归找出所有
-    「挂在某个 chapterUid 下、看起来像正文的字符串」。
-    认不出来时返回空 dict（界面会显示「该章暂无内容」），不会抛异常。
+    返回：[{'chapterUid': int, 'version': int,
+            'items': [{'text','level','uiIdx','uniqId','range'}]}]
+    只保留 items 非空的章节。`level` 语义（实测）：
+        1 = 章标题   2 = 小节   3 = 要点   4 = 细节/支撑句
     """
-    out = {}
+    out = []
+    for el in ((raw or {}).get('itemsArray') or []):
+        items = []
+        for it in (el.get('items') or []):
+            if not isinstance(it, dict):
+                continue
+            txt = (it.get('text') or '').strip()
+            if not txt:
+                continue
+            items.append({
+                'text': txt,
+                'level': int(it.get('level') or 1),
+                'uiIdx': it.get('uiIdx') or '',
+                'uniqId': it.get('uniqId') or '',
+                'range': it.get('range') or '',
+            })
+        if not items:
+            continue
+        try:
+            uid = int(el.get('chapterUid'))
+        except (TypeError, ValueError):
+            uid = el.get('chapterUid')
+        out.append({'chapterUid': uid,
+                    'version': el.get('version') or 0,
+                    'items': items})
+    return out
 
-    def add(uid, s):
-        if isinstance(s, str) and s.strip():
-            out.setdefault(uid, []).append(s.strip())
 
-    def walk(node, cur_uid=None):
-        if isinstance(node, dict):
-            uid = node.get('chapterUid')
-            if uid is None:
-                uid = node.get('chapter_uid')
-            if uid is None:
-                uid = cur_uid
-            for k in _OUTLINE_TEXT_KEYS:
-                v = node.get(k)
-                if isinstance(v, str):
-                    add(uid, v)
-                elif isinstance(v, list):
-                    for x in v:
-                        if isinstance(x, str):
-                            add(uid, x)
-                        else:
-                            walk(x, uid)
-            for k, v in node.items():
-                if k in _OUTLINE_TEXT_KEYS:
-                    continue
-                walk(v, uid)
-        elif isinstance(node, list):
-            for x in node:
-                walk(x, cur_uid)
+def outline_chapter_title(node):
+    """一章的标题：优先取 level<=1 的第一条。"""
+    for it in ((node or {}).get('items') or []):
+        if int(it.get('level') or 1) <= 1:
+            return (it.get('text') or '').strip()
+    items = (node or {}).get('items') or []
+    return (items[0].get('text') or '').strip() if items else ''
 
-    walk(data)
-    return {k: v for k, v in out.items() if v}
+
+def outline_chapter_text(node, with_title=True):
+    """一章的大纲 → 按层级缩进的纯文本。"""
+    lines = []
+    for i, it in enumerate((node or {}).get('items') or []):
+        lvl = max(1, int(it.get('level') or 1))
+        if lvl <= 1 and not with_title and i == 0:
+            continue
+        lines.append(' ' * ((lvl - 1) * 2) + (it.get('text') or ''))
+    return '\n'.join(lines)
+
+
+def outline_chapter_md(node, heading_level=3):
+    """一章的大纲 → Markdown。
+
+    章标题做标题，小节加粗，三级用「- 」，四级缩进一级 ——
+    直接粘进任何 Markdown 编辑器都能看出层次。
+    """
+    out = []
+    for i, it in enumerate((node or {}).get('items') or []):
+        txt = it.get('text') or ''
+        lvl = max(1, int(it.get('level') or 1))
+        if lvl <= 1:
+            if i == 0:
+                out.append('%s %s' % ('#' * max(1, min(6, heading_level)), txt))
+            else:
+                out.append('**%s**' % txt)
+        elif lvl == 2:
+            out.append('**%s**' % txt)
+        elif lvl == 3:
+            out.append('- %s' % txt)
+        else:
+            out.append('  - %s' % txt)
+    return '\n'.join(out)
+
+
+def outline_book_md(tree):
+    """整本大纲 → Markdown（每章之间空一行）。"""
+    parts = []
+    for node in (tree or []):
+        parts.append(outline_chapter_md(node))
+    return '\n\n'.join(p for p in parts if p.strip())
+
+
+def _initial_state(html):
+    """从 SSR 页面里抠出 window.__INITIAL_STATE__ 的 JSON（括号计数法）。"""
+    i = (html or '').find('window.__INITIAL_STATE__')
+    if i < 0:
+        return {}
+    j = html.find('{', i)
+    if j < 0:
+        return {}
+    depth, k, instr, esc = 0, j, False, False
+    while k < len(html):
+        ch = html[k]
+        if instr:
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == '"':
+                instr = False
+        else:
+            if ch == '"':
+                instr = True
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+        k += 1
+    try:
+        return json.loads(html[j:k + 1])
+    except Exception:
+        return {}
+
+
+# 用一个确定存在的书页做「登录态探针」（只读，不带任何写操作）
+LOGIN_PROBE_URL = 'https://weread.qq.com/web/reader/5ff32970721696fb5ffc757'
+
+
+def check_login(cookie, timeout=None):
+    """验证 Cookie 是否有效 —— 靠阅读页 SSR 里的 user.vid 判断。
+
+    ⚠️ 为什么**不能**用 outline 系列接口判断登录态（踩过这个坑）：
+    `/web/book/outline` 和 `/web/book/outline/check` **根本不需要登录**，
+    拿它们做判据会得出「Cookie 无效」的错误结论。
+
+    正确的判据是阅读页：带上有效 Cookie 时，SSR 里会出现
+    `user.vid`（你的用户 ID）和 `reader.token`，页面体积也会显著变大。
+    实测：无 Cookie 时两处都为空、201KB；有 Cookie 时 vid=931802091、791KB。
+
+    返回 {'ok': bool, 'vid': str, 'token': str, 'nick': str, 'note': str}
+    """
+    req = urllib.request.Request(
+        LOGIN_PROBE_URL,
+        headers={'User-Agent': UA, 'Referer': 'https://weread.qq.com/',
+                 'Cookie': normalize_cookie(cookie) or (cookie or '')})
+    try:
+        with open_request(req, timeout=timeout or 25) as r:
+            html = r.read().decode('utf-8', 'replace')
+    except Exception as e:
+        return {'ok': False, 'vid': '', 'token': '', 'nick': '',
+                'note': '打不开微信读书：%s' % str(e)[:60]}
+    st = _initial_state(html)
+    user = st.get('user') or {}
+    reader = st.get('reader') or {}
+    # user.vid 可能是字符串，也可能是 {'vid': ...} 这种对象
+    vid = user.get('vid')
+    if isinstance(vid, dict):
+        vid = vid.get('vid')
+    vid = str(vid or '').strip()
+    token = str(reader.get('token') or '').strip()
+    nick = ''
+    for k in ('nick', 'name', 'nickname'):
+        if user.get(k):
+            nick = str(user[k])
+            break
+    ok = bool(vid)
+    return {'ok': ok, 'vid': vid, 'token': token, 'nick': nick,
+            'note': '' if ok else '服务端没有认出登录身份（页面里 user.vid 为空）'}
 
 
 def search_books(keyword, timeout=None):
