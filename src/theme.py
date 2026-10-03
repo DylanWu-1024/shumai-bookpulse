@@ -51,12 +51,14 @@ NEUTRALS = {
         'glass_on': True,
     },
     'dark': {
-        'bg': '#12111F', 'card': '#1C1B2E', 'ink': '#EDEDF7', 'ink_sub': '#C7C9DE',
-        'muted': '#8A8DA8', 'line': '#2A2942', 'input_border': '#35344F',
+        'bg': '#12111F', 'card': '#1C1B2E', 'ink': '#EDEDF7', 'ink_sub': '#C9CBDF',
+        # muted 提亮一档（#8A8DA8 → #A2A6C6）：Hint/PageDesc 都是 12px 小字，
+        # 旧值在暗背景上对比度只有 ~5:1，玻璃模式下更糊（磊哥实测反馈看不清）
+        'muted': '#A2A6C6', 'line': '#2A2942', 'input_border': '#35344F',
         'hover': '#242339', 'grid': '#23223A', 'head': '#1A1930', 'border_hl': '#4A4880',
-        'dis_bg': '#26253D', 'dis_fg': '#5F6180',
+        'dis_bg': '#26253D', 'dis_fg': '#6B6D8C',
         'side_top': '#1A1930', 'side_bot': '#121120',
-        'side_text': '#C7D2FE', 'side_muted': '#777BA8',
+        'side_text': '#CBD5FE', 'side_muted': '#8D91C2',
         'log_bg': '#0C0B16', 'log_fg': '#A5B4FC',
         'danger': '#FB7185', 'danger_soft': '#3A1E29', 'danger_ink': '#FDA4AF',
         'success': '#34D399', 'warn': '#FBBF24',

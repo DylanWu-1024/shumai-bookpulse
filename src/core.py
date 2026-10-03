@@ -441,6 +441,45 @@ def outline_chapter_md(node, heading_level=3):
     return '\n'.join(out)
 
 
+def outline_as_result(tree, title=''):
+    """把大纲树转成**划线风格的 result**，让 docx / epub / csv / json / pdf
+    这些现成渲染器直接复用（否则每种格式都得为大纲单独写一遍）。
+
+    层级怎么保留：level 2/3/4 的文本分别加「■ / ● / 缩进·」前缀，
+    在 Word / EPUB 里依然一眼能看出层次；md / txt / html 走各自的原生
+    层级渲染，不经这里。
+    """
+    chapters = {}
+    items = []
+    for node in (tree or []):
+        uid = str(node.get('chapterUid') or len(chapters))
+        chapters[uid] = outline_chapter_title(node) or ('第 %s 章' % uid)
+        for it in node.get('items') or []:
+            try:
+                lvl = int(it.get('level') or 1)
+            except Exception:
+                lvl = 1
+            t = (it.get('text') or '').strip()
+            if not t:
+                continue
+            if lvl == 2:
+                t = '■ ' + t
+            elif lvl == 3:
+                t = '● ' + t
+            elif lvl >= 4:
+                t = '　　· ' + t
+            items.append({'chapterUid': uid, 'markText': t, 'totalCount': 0})
+    return {
+        'book': {'title': title or 'AI 大纲', 'author': ''},
+        'keyword': title,
+        'items': items,
+        'chapters': chapters,
+        'fetched_at': now_str(),
+        'total': len(items),
+        'all_count': len(items),
+    }
+
+
 def outline_book_md(tree):
     """整本大纲 → Markdown（每章之间空一行）。"""
     parts = []
@@ -618,6 +657,40 @@ def check_login(cookie, timeout=None):
             'note': '' if ok else '服务端没有认出登录身份（页面里 user.vid 为空）'}
 
 
+def relevance_score(book, keyword):
+    """一本书对搜索词的**相关性分**（越大越相关）。
+
+    之前直接用接口返回的顺序，有时「同名的另一本书」会排在正主前面。
+    现在：标题精确匹配 > 前缀 > 包含 > 作者命中 > 其它；
+    同一档内再按推荐值（+0~8）与评价人数（+0~2）微调。
+    """
+    t = ((book or {}).get('title') or '').strip().lower()
+    a = ((book or {}).get('author') or '').strip().lower()
+    k = (keyword or '').strip().lower()
+    if not k:
+        base = 10
+    elif t == k:
+        base = 100
+    elif t.startswith(k):
+        base = 90
+    elif k in t:
+        base = 80
+    elif k in a:
+        base = 60
+    else:
+        base = 10
+    s = float(base)
+    try:
+        s += min(8.0, (float(book.get('rating') or 0) / 1000.0) * 8.0)
+    except Exception:
+        pass
+    try:
+        s += min(2.0, int(book.get('rating_count') or 0) / 50000.0)
+    except Exception:
+        pass
+    return s
+
+
 def search_books(keyword, timeout=None):
     """按书名搜索，返回候选列表。
 
@@ -660,6 +733,9 @@ def search_books(keyword, timeout=None):
             # 从 deepLink 里抠出 infoId，供阅读器地址使用（见 book_reader_url）。
             'infoId': _info_id_from_link(info.get('deepLink') or ''),
         })
+    # 相关性排序（稳定）：标题精确匹配的正主永远排第一，
+    # 同档内推荐值高、评价多的在前。
+    out.sort(key=lambda b: -relevance_score(b, keyword))
     return out
 
 
@@ -1422,12 +1498,18 @@ def export_text(text, out_dir, stem, ext='.md'):
     return path
 
 
-def export(result, out_dir, fmt='html', with_people=True, style=None):
-    """写盘。文件名带时间戳 → 同一本书反复导出也不会互相覆盖。"""
+def export(result, out_dir, fmt='html', with_people=True, style=None, name=None):
+    """写盘。文件名带时间戳 → 同一本书反复导出也不会互相覆盖。
+
+    `name` 可自定义完整文件名（AI 大纲等非「热门划线」内容用它，
+    不然文件名里会出现「热门划线」字样）。
+    """
     os.makedirs(out_dir, exist_ok=True)
     ext = FORMATS.get(fmt, '.txt')
     tag = '分享版' if fmt == 'share' else ''
-    name = '《%s》热门划线%s-%s%s' % (safe_filename(result['book']['title']), tag, stamp(), ext)
+    if not name:
+        name = '《%s》热门划线%s-%s%s' % (
+            safe_filename(result['book']['title']), tag, stamp(), ext)
     path = os.path.join(out_dir, name)
 
     data = render(result, fmt, with_people, style)

@@ -138,7 +138,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.5'
+APP_VERSION = '2.6'
 
 
 # ==========================================================================
@@ -240,6 +240,21 @@ class BatchWorker(QThread):
 # ==========================================================================
 # 小部件工厂
 # ==========================================================================
+def wrap_hfw(layout):
+    """把一个布局包进 QWidget 并打开 heightForWidth。
+
+    允许「宽度决定高度」的布局（比如会自动换行的 FlowLayout）正常起作用：
+    不打开这个标志，外层布局不知道它换行后要占多高，会把它压成一行。
+    """
+    w = QWidget()
+    layout.setContentsMargins(0, 0, 0, 0)
+    w.setLayout(layout)
+    sp = w.sizePolicy()
+    sp.setHeightForWidth(True)
+    w.setSizePolicy(sp)
+    return w
+
+
 def _tag(text):
     lb = QLabel(text)
     lb.setObjectName('Hint')
@@ -525,11 +540,13 @@ def export_result(result, fmt_choice, count=0, min_people=None):
     返回 (导出的文件路径列表, 过滤后的 result)
     """
     r = dict(result)
-    if count:
-        r['items'] = list(r['items'])[:count]
-
+    # 语义（2026-10-03 与磊哥对齐）：「条数」= **先按人数下限过滤、再数前 N 条**。
+    # 以前是先截断再过滤，结果既不是「全部 ≥N 人」也不保证 N 条 —— 两个设置打架。
+    # 现在人数过滤永远先生效，count 是过滤后的计数，0 = 全部。
     mp = settings.get('min_people') if min_people is None else min_people
     r = core.apply_min_people(r, mp)
+    if count:
+        r['items'] = list(r['items'])[:count]
 
     if fmt_choice == '__all__':
         fmts = list(settings.get('export_formats') or ['html'])
@@ -606,6 +623,8 @@ class SearchPage(QWidget):
         self.result = None
         self._sw = None
         self._fw = None
+        self._back_stack = []       # 「返回上一本」的栈（配合同类型推荐）
+        self._result_cache = {}     # bookId → 抓过的结果（返回时秒出）
         self._build()
 
     def _build(self):
@@ -696,10 +715,17 @@ class SearchPage(QWidget):
         # 挤成一行时最后的主按钮会被裁掉（实测过），分开之后每行都松快。
         tools = QHBoxLayout()
         tools.setSpacing(8)
+        # 「返回上一本」—— 配合同类型推荐用：点了推荐书之后能一路退回来。
+        self.btn_back = QPushButton()
+        self.btn_back.setProperty('flat', True)
+        self.btn_back.hide()
+        self.btn_back.clicked.connect(self.go_back)
+        tools.addWidget(self.btn_back)
         tools.addWidget(_tag(T('search.count')))
         self.cb_top = QComboBox()
         self.cb_top.addItems(['50', '100', '300', T('batch.all')])
         self.cb_top.setFixedWidth(96)
+        self.cb_top.setToolTip(T('search.count_tip'))
         tools.addWidget(self.cb_top)
         tools.addWidget(_tag(T('search.format')))
         self.cb_fmt = QComboBox()
@@ -729,8 +755,9 @@ class SearchPage(QWidget):
         tools.addWidget(self.btn_open)
         rv.addLayout(tools)
 
-        acts = QHBoxLayout()
-        acts.setSpacing(8)
+        # 操作按钮用 FlowLayout：窗口不够宽时自动换行，而不是把最后一个
+        # 按钮压缩到「导到 expc」这种裁字（2026-10-03 磊哥截图反馈）。
+        acts = W.FlowLayout(spacing=8)
 
         # 去微信读书读这本书：用系统默认浏览器打开**阅读器**页面。
         # 踩过的坑：接口给的 deepLink 是详情页（book-detail），点进去只有简介，
@@ -784,12 +811,11 @@ class SearchPage(QWidget):
         self.btn_copy.clicked.connect(self.show_copy_menu)
         acts.addWidget(self.btn_copy)
 
-        acts.addStretch(1)
         self.btn_export = QPushButton(T('search.export'))
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.do_export)
         acts.addWidget(self.btn_export)
-        rv.addLayout(acts)
+        rv.addWidget(wrap_hfw(acts))     # 打开 heightForWidth，换行才生效
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels([
@@ -811,6 +837,19 @@ class SearchPage(QWidget):
         self.table.setColumnWidth(1, 148)
         self.table.setColumnWidth(3, 80)
         rv.addWidget(self.table, 1)
+
+        # 「同类型好书」推荐区：从本次搜索的候选里挑口碑最好的几本，
+        # 点一下直接抓它；看完点上方「返回《原书名》」退回来，可反复循环。
+        self.reco_card = W.Card()
+        rc = card_layout(self.reco_card, margins=(14, 12, 14, 14), spacing=8)
+        rt = QLabel(T('search.reco'))
+        rt.setObjectName('CardTitle')
+        rc.addWidget(rt)
+        rc.addWidget(wrap_label(T('search.reco_hint'), 'Hint'))
+        self.reco_flow = W.FlowLayout(spacing=8)
+        rc.addLayout(self.reco_flow)
+        self.reco_card.hide()
+        rv.addWidget(self.reco_card)
 
         split.addWidget(left)
         split.addWidget(right)
@@ -885,6 +924,8 @@ class SearchPage(QWidget):
     def _on_search_ok(self, books):
         self._reset_search_btn()
         self.books = books
+        self._back_stack = []       # 新搜索 = 新上下文，返回栈清空
+        self._update_back_btn()
         if not books:
             self.win.toast(T('toast.no_result'), kind='warn')
             return
@@ -920,6 +961,52 @@ class SearchPage(QWidget):
         if row < 0:
             return
         book = self.list_cand.item(row).data(Qt.UserRole)
+        self._maybe_push_current(book)
+        self._start_fetch(book)
+
+    def open_reco(self, book):
+        """点「同类型好书」里的一本 —— 当前书入栈，直接去抓它。"""
+        self._maybe_push_current(book)
+        self._start_fetch(book)
+
+    def _maybe_push_current(self, next_book):
+        """如果当前正显示着另一本书的结果，把它压进返回栈。"""
+        if not self.result:
+            return
+        cur = self.result.get('book') or {}
+        cur_id = str(cur.get('bookId') or '')
+        nxt_id = str((next_book or {}).get('bookId') or '')
+        if not cur_id or cur_id == nxt_id:
+            return
+        if not any(str(b.get('bookId')) == cur_id for b in self._back_stack):
+            self._back_stack.append(cur)
+        self._update_back_btn()
+
+    def _update_back_btn(self):
+        if self._back_stack:
+            b = self._back_stack[-1]
+            self.btn_back.setText('← %s' % T('search.back_to',
+                                             title=(b.get('title') or '')[:14]))
+            self.btn_back.show()
+        else:
+            self.btn_back.hide()
+
+    def go_back(self):
+        """返回上一本书（优先用缓存，秒出；没缓存就重新抓）。"""
+        if not self._back_stack:
+            return
+        b = self._back_stack.pop()
+        self._update_back_btn()
+        cached = self._result_cache.get(str(b.get('bookId') or ''))
+        if cached:
+            self.show_result(cached, from_cache=True)
+            self._fill_reco(cached)
+            self.win.toast(T('toast.back_ok', title=(b.get('title') or '')[:14]),
+                           kind='ok', hold=2400)
+        else:
+            self._start_fetch(b)
+
+    def _start_fetch(self, book):
         self.btn_fetch.setEnabled(False)
         self.btn_fetch.setText(T('search.fetching'))
         self.win.toast(T('toast.fetching', title=book['title']))
@@ -932,7 +1019,9 @@ class SearchPage(QWidget):
     def _on_fetch_ok(self, r):
         self.btn_fetch.setEnabled(True)
         self.btn_fetch.setText(T('search.fetch'))
+        self._result_cache[str(r['book'].get('bookId') or '')] = r
         self.show_result(r)
+        self._fill_reco(r)
 
         sid = None
         try:
@@ -952,6 +1041,50 @@ class SearchPage(QWidget):
             self.win.toast(T('toast.fetch_ok_nodb', title=r['book']['title'], n=r['all_count']),
                            kind='warn', hold=3400)
         self.win.refresh_library(r['book'].get('bookId'))
+
+    def _fill_reco(self, r):
+        """同类型好书：本次搜索的候选里（排除当前这本）按口碑挑 4 本。"""
+        cur_id = str((r.get('book') or {}).get('bookId') or '')
+        # 清掉旧按钮
+        while self.reco_flow.count():
+            it = self.reco_flow.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        cands = [b for b in (self.books or [])
+                 if str(b.get('bookId') or '') != cur_id]
+
+        def quality(b):
+            try:
+                rc = int(b.get('rating_count') or 0)
+            except Exception:
+                rc = 0
+            try:
+                rt = float(b.get('rating') or 0)
+            except Exception:
+                rt = 0.0
+            return (rc, rt)
+
+        cands.sort(key=quality, reverse=True)
+        show = cands[:4]
+        if not show:
+            self.reco_card.hide()
+            return
+        for b in show:
+            try:
+                score = float(b.get('rating') or 0) / 10.0
+                badge = (' · %.1f' % score) if score > 0 else ''
+            except Exception:
+                badge = ''
+            if b.get('rating_label'):
+                badge += ' · %s' % b['rating_label']
+            btn = QPushButton('《%s》%s' % ((b.get('title') or '')[:18], badge))
+            btn.setProperty('flat', True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(T('search.reco_tip', title=b.get('title') or ''))
+            btn.clicked.connect(lambda _, bb=b: self.open_reco(bb))
+            self.reco_flow.addWidget(btn)
+        self.reco_card.show()
 
     def _on_fetch_err(self, msg):
         self.btn_fetch.setEnabled(True)
@@ -1184,11 +1317,12 @@ class SearchPage(QWidget):
         fmt = self.cb_fmt.currentData()
         n = self._top_value()
         base = dict(self.result)
-        # 导出跟随当前排序 —— 所见即所得，切到「按章节」导出的就是章节顺序
-        items = self._sorted_items(base['items'])
-        base['items'] = items if not n else items[:n]
+        # 导出跟随当前排序 —— 所见即所得，切到「按章节」导出的就是章节顺序。
+        # 条数不在截这里：交给 export_result（先按「划线人数 ≥N」过滤、再取前 n 条，
+        # 否则「条数」和「人数下限」两个设置会打架）。
+        base['items'] = self._sorted_items(base['items'])
         try:
-            paths, kept = export_result(base, fmt)
+            paths, kept = export_result(base, fmt, count=n)
         except Exception as e:
             QMessageBox.warning(self, T('search.export'), str(e))
             return
@@ -1403,7 +1537,10 @@ class BatchPage(QWidget):
             return
         a, b = self.sp_min.value(), self.sp_max.value()
         interval = (min(a, b), max(a, b))
-        top = self.sp_top.value()
+        # 抓取永远全量入库：接口本来就一次给整本，早期在这里截断
+        # 既不省网络、还会让「导出条数」和「划线人数 ≥N」打架（截断在过滤之前）。
+        # 「条数」现在只影响导出（见 on_item 里 export_result 的 count）。
+        top = 0
 
         self.table.setRowCount(0)
         self.log.clear()
@@ -1435,7 +1572,9 @@ class BatchPage(QWidget):
     def on_item(self, r):
         row = self.table.rowCount()
         self.table.insertRow(row)
-        paths, kept = export_result(r, self.cb_fmt.currentData())
+        # 「条数」= 先按「划线人数 ≥N」过滤、再取前 N 条（语义与搜索页一致）
+        paths, kept = export_result(r, self.cb_fmt.currentData(),
+                                    count=self.sp_top.value())
         name = os.path.basename(paths[0]) if paths else '—'
         if len(paths) > 1:
             name = '%s … (+%d)' % (name, len(paths) - 1)
@@ -3309,6 +3448,28 @@ class OutlineWorker(QThread):
             self.fail.emit(str(e))
 
 
+class FnWorker(QThread):
+    """在后台线程跑一个任意函数（ok 带返回值 / err 带错误信息）。
+
+    为什么要有这个类：设置页有几种「点了会联网」的按钮（网络自检 / 测试连接），
+    一次自检最长 3×8 秒 —— 这种调用**绝不能在主线程跑**，否则整个窗口
+    「未响应」（2026-10-03 磊哥实测卡死过）。凡是槽函数里要做网络 IO 的，
+    一律包成 FnWorker 丢后台。
+    """
+    ok = Signal(object)
+    err = Signal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.ok.emit(self._fn())
+        except Exception as e:
+            self.err.emit(str(e))
+
+
 class OutlinePage(QWidget):
     """AI 大纲 —— 书里每一章的总结性要点，单独一页查看/复制/导出。"""
 
@@ -3462,30 +3623,36 @@ class OutlinePage(QWidget):
         末段锚点 #outline?noScroll=1 是实测抓到的（浏览器里点开 AI 大纲时
         地址栏就长这样）。登录态由浏览器自己维持，程序不发任何带身份的请求。
 
-        本地书库存的是数字 bookId，而拼地址要 infoId，所以先反查一次官方链接。
+        本地书库存的是数字 bookId，而拼地址要 infoId，所以先反查一次官方链接
+        （首次是一次真实搜索请求 —— 丢后台线程跑，主线程等它就是「未响应」）。
         """
         bid, title = self._current_book()
         if not bid:
             self.win.toast(T('outline.pick'), kind='warn')
             return
-        self.lb_state.setText(T('outline.link_resolving'))
-        QApplication.processEvents()
-        d = {}
-        try:
-            d = core.resolve_book_link(bid, title) or {}
-        except Exception:
-            d = {}
-        info = d.get('book') or {'infoId': d.get('infoId') or '',
-                                 'deepLink': d.get('deepLink') or '',
-                                 'title': title}
-        url = core.book_outline_url(info)
-        if '/web/reader/' not in (url or ''):
-            self.lb_state.setText(T('outline.link_fail'))
-            self.win.toast(T('outline.link_fail'), kind='warn', hold=5200)
+        if getattr(self, '_link_worker', None) and self._link_worker.isRunning():
             return
-        self.lb_state.setText('')
-        QDesktopServices.openUrl(QUrl(url))
-        self.win.toast(T('toast.weread_opened'), kind='ok')
+        self.lb_state.setText(T('outline.link_resolving'))
+        self._link_worker = FnWorker(lambda: core.resolve_book_link(bid, title), self)
+
+        def _opened(d):
+            self.lb_state.setText('')
+            d = d or {}
+            info = d.get('book') or {'infoId': d.get('infoId') or '',
+                                     'deepLink': d.get('deepLink') or '',
+                                     'title': title}
+            url = core.book_outline_url(info)
+            if '/web/reader/' not in (url or ''):
+                self.lb_state.setText(T('outline.link_fail'))
+                self.win.toast(T('outline.link_fail'), kind='warn', hold=5200)
+                return
+            QDesktopServices.openUrl(QUrl(url))
+            self.win.toast(T('toast.weread_opened'), kind='ok')
+
+        self._link_worker.ok.connect(_opened)
+        self._link_worker.err.connect(
+            lambda _m: self.win.toast(T('outline.link_fail'), kind='warn', hold=5200))
+        self._link_worker.start()
 
     def _cookie(self):
         return (settings.get('weread_cookie') or '').strip()
@@ -3673,17 +3840,47 @@ class OutlinePage(QWidget):
         return head + '\n\n'.join(md for _, md in self._md_blocks())
 
     def copy_chapter(self):
+        """复制本章 —— 与搜索页一致的多格式菜单（纯文本 / Markdown）。"""
         node = getattr(self, '_cur_node', None)
         if not node:
             return
-        t = core.outline_chapter_text(node, with_title=True)
+        m = QMenu(self)
+        a_txt = m.addAction(T('outline.copy_ch_txt'))
+        a_md = m.addAction(T('outline.copy_ch_md'))
+        act = m.exec(self.btn_copy.mapToGlobal(self.btn_copy.rect().bottomLeft()))
+        if act is None:
+            return
+        t = (core.outline_chapter_text(node, with_title=True) if act is a_txt
+             else core.outline_chapter_md(node))
         if not t.strip():
             return
         QApplication.clipboard().setText(t)
         self.win.toast(T('outline.copied'), kind='ok')
 
     def copy_all(self):
-        t = self._full_text()
+        """复制全部章节 —— 纯文本 / Markdown / HTML 源码 三选。"""
+        if not self._md_blocks():
+            return
+        m = QMenu(self)
+        a_md = m.addAction(T('outline.copy_all_md'))
+        a_txt = m.addAction(T('outline.copy_all_txt'))
+        a_html = m.addAction(T('outline.copy_all_html'))
+        act = m.exec(self.btn_copy_all.mapToGlobal(self.btn_copy_all.rect().bottomLeft()))
+        if act is None:
+            return
+        if act is a_md:
+            t = self._full_text()
+        elif act is a_txt:
+            out = ['《%s》· AI 大纲' % self.book_title, '']
+            for node in self._ordered_nodes():
+                out.append(core.outline_chapter_title(node))
+                out.append('')
+                out.append(core.outline_chapter_text(node, with_title=False))
+                out.append('')
+            t = '\n'.join(out)
+        else:
+            t = core.outline_book_html(self._ordered_nodes(),
+                                       title=self.book_title, colors=self._colors())
         if not t.strip():
             return
         QApplication.clipboard().setText(t)
@@ -3711,26 +3908,59 @@ class OutlinePage(QWidget):
         return self._full_text()
 
     def do_export(self):
-        """导出大纲：Markdown / 纯文本 / 网页，任选。"""
+        """导出大纲 —— 格式族与「搜索下载」一致（网页/MD/TXT/CSV/JSON/
+        分享版/Word/EPUB/PDF，或按设置一次导出多格式）。
+
+        md / txt / html 用大纲自己的**层级渲染**；其余格式走
+        `core.outline_as_result()` 转成划线风格伪 result，复用现成导出器
+        （层级用 ■/●/缩进 前缀保留）。
+        """
         if not self._md_blocks():
             return
-        default = os.path.join(
-            export_dir(), '《%s》AI大纲-%s.md'
-            % (core.safe_filename(self.book_title), core.stamp()))
-        filt = ';;'.join(['Markdown (*.md)', '纯文本 (*.txt)',
-                          '网页 (*.html)', '所有文件 (*)'])
-        path, _ = QFileDialog.getSaveFileName(self, T('outline.export'), default, filt)
-        if not path:
+        m = QMenu(self)
+        acts = {}
+        for k in core.FORMATS:
+            acts[m.addAction(T('fmt.%s' % k))] = k
+        m.addSeparator()
+        a_all = m.addAction(T('search.fmt_all'))
+        act = m.exec(self.btn_export.mapToGlobal(self.btn_export.rect().bottomLeft()))
+        if act is None:
             return
-        ext = (os.path.splitext(path)[1] or '.md').lower()
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(self._render_text(ext))
-        except Exception as e:
-            QMessageBox.warning(self, T('outline.export'), str(e))
+
+        fmts = (list(settings.get('export_formats') or ['html']) if act is a_all
+                else [acts[act]])
+        out = export_dir()
+        paths, failed = [], []
+        for f in fmts:
+            try:
+                if f in ('md', 'txt', 'html'):
+                    ext = {'md': '.md', 'txt': '.txt', 'html': '.html'}[f]
+                    name = '《%s》AI大纲-%s%s' % (
+                        core.safe_filename(self.book_title), core.stamp(), ext)
+                    path = os.path.join(out, name)
+                    with open(path, 'w', encoding='utf-8') as fh:
+                        fh.write(self._render_text(ext))
+                    paths.append(path)
+                else:
+                    pseudo = core.outline_as_result(self._ordered_nodes(),
+                                                    title=self.book_title)
+                    fname = '《%s》AI大纲-%s%s' % (
+                        core.safe_filename(self.book_title), core.stamp(),
+                        core.FORMATS.get(f, '.txt'))
+                    paths.append(core.export(pseudo, out, f, with_people=False,
+                                             name=fname))
+            except Exception:
+                failed.append(f)
+        if not paths:
+            QMessageBox.warning(self, T('outline.export'),
+                                '导出失败：%s' % '、'.join(failed or ['未知原因']))
             return
-        self.win.toast(T('outline.exported', name=os.path.basename(path)),
-                       kind='ok', hold=3600)
+        name = os.path.basename(paths[0])
+        if len(paths) > 1:
+            name = '%s … (+%d)' % (name, len(paths) - 1)
+        self.win.toast(T('outline.exported', name=name), kind='ok', hold=3600)
+        if failed:
+            self.win.toast('以下格式失败：%s' % '、'.join(failed), kind='warn', hold=5200)
         self.win.refresh_exports()
 
 
@@ -4167,6 +4397,7 @@ class SettingsPage(QWidget):
         self.sp_count.valueChanged.connect(
             lambda v: settings.set_value('def_count', int(v)))
         bv.addLayout(self._row(T('set.def_count'), self.sp_count))
+        bv.addWidget(self._hint(T('set.def_count_hint')))
 
         # 划线人数下限（默认 ≥2 人）
         self.sp_minp = QSpinBox()
@@ -4476,11 +4707,11 @@ class SettingsPage(QWidget):
         wv.addWidget(self._hint(T('set.cookie_local_note')))
         wr_row = QHBoxLayout()
         wr_row.setSpacing(8)
-        b_ct = QPushButton(T('set.cookie_test'))
-        b_ct.setProperty('ghost', True)
-        b_ct.setCursor(Qt.PointingHandCursor)
-        b_ct.clicked.connect(self.on_test_cookie)
-        wr_row.addWidget(b_ct)
+        self.btn_cookie_test = QPushButton(T('set.cookie_test'))
+        self.btn_cookie_test.setProperty('ghost', True)
+        self.btn_cookie_test.setCursor(Qt.PointingHandCursor)
+        self.btn_cookie_test.clicked.connect(self.on_test_cookie)
+        wr_row.addWidget(self.btn_cookie_test)
         b_clr = QPushButton(T('set.cookie_clear'))
         b_clr.setProperty('ghost', True)
         b_clr.setCursor(Qt.PointingHandCursor)
@@ -4531,11 +4762,11 @@ class SettingsPage(QWidget):
         # 用来回答「是不是我的网络问题」—— 代理时开时关时这个特别好使。
         net_row = QHBoxLayout()
         net_row.setSpacing(8)
-        b_st = QPushButton(T('set.net_test'))
-        b_st.setProperty('ghost', True)
-        b_st.setCursor(Qt.PointingHandCursor)
-        b_st.clicked.connect(self.on_net_test)
-        net_row.addWidget(b_st)
+        self.btn_net_test = QPushButton(T('set.net_test'))
+        self.btn_net_test.setProperty('ghost', True)
+        self.btn_net_test.setCursor(Qt.PointingHandCursor)
+        self.btn_net_test.clicked.connect(self.on_net_test)
+        net_row.addWidget(self.btn_net_test)
         net_row.addStretch(1)
         self.lb_net = wrap_label('', 'Hint')
         net_row.addWidget(self.lb_net, 1)
@@ -4618,15 +4849,7 @@ class SettingsPage(QWidget):
         self.refresh_stats()
 
     def _wrap(self, layout):
-        w = QWidget()
-        layout.setContentsMargins(0, 0, 0, 0)
-        w.setLayout(layout)
-        # 允许「宽度决定高度」的布局（比如会自动换行的 FlowLayout）正常起作用：
-        # 不打开这个标志，外层布局不知道它换行后要占多高，会把它压成一行。
-        sp = w.sizePolicy()
-        sp.setHeightForWidth(True)
-        w.setSizePolicy(sp)
-        return w
+        return wrap_hfw(layout)
 
     def refresh_stats(self):
         st = self.win.kb.stats()
@@ -4683,16 +4906,22 @@ class SettingsPage(QWidget):
         """网络自检：把「直连 / 系统代理 / 自定义」逐个真跑一次，报耗时。
 
         这是回答「是网络问题还是程序慢」最直接的办法 —— 谁快用谁。
+        ⚠️ 联网过程必须在后台线程（FnWorker）：一次自检最长 3×8 秒，
+        在主线程跑就是整个窗口「未响应」。
         """
+        if getattr(self, '_net_worker', None) and self._net_worker.isRunning():
+            return                      # 正在测，别叠加
+        self.btn_net_test.setEnabled(False)
         self.lb_net.setText(T('outline.loading'))
-        QApplication.processEvents()
-        try:
-            res = core.net_selftest()
-        except Exception as e:
-            self.lb_net.setText(T('set.net_test_fail', msg=str(e)[:60]))
-            return
+        self._net_worker = FnWorker(core.net_selftest, self)
+        self._net_worker.ok.connect(self._on_net_test_ok)
+        self._net_worker.err.connect(self._on_net_test_err)
+        self._net_worker.start()
+
+    def _on_net_test_ok(self, res):
+        self.btn_net_test.setEnabled(True)
         parts, best = [], None
-        for r in res:
+        for r in (res or []):
             label = {'direct': T('set.pmode_direct'),
                      'system': T('set.pmode_system'),
                      'custom': T('set.pmode_custom')}.get(r['mode'], r['mode'])
@@ -4703,7 +4932,7 @@ class SettingsPage(QWidget):
                     best = (r['mode'], label, r['ms'])
             else:
                 parts.append('%s ✗' % label)
-        self.lb_net.setText(' · '.join(parts))
+        self.lb_net.setText(' · '.join(parts) or '—')
         if best:
             if best[0] != (settings.get('net_proxy_mode') or 'direct'):
                 self.win.toast(T('set.net_test_switch', name=best[1], ms=best[2]),
@@ -4711,6 +4940,10 @@ class SettingsPage(QWidget):
             else:
                 self.win.toast(T('set.net_test_ok', name=best[1], ms=best[2]),
                                kind='ok', hold=4200)
+
+    def _on_net_test_err(self, msg):
+        self.btn_net_test.setEnabled(True)
+        self.lb_net.setText(T('set.net_test_fail', msg=msg[:60]))
 
     # ---------------- 微信读书登录（只为 AI 大纲）----------------
     def on_open_weread(self):
@@ -4768,29 +5001,38 @@ class SettingsPage(QWidget):
         因为 AI 大纲接口根本不需要登录（实测），拿它当判据会得出错误结论。
         带有效 Cookie 时，阅读页的 `window.__INITIAL_STATE__` 里会出现
         `user.vid`（你的用户 ID）与 `reader.token`，页面体积也会明显变大。
+        ⚠️ 联网必须在后台线程（FnWorker）—— 主线程等它就是「未响应」。
         """
         ck = (self.ed_cookie.text() or '').strip()
         if not ck:
             self.lb_cookie_state.setText(T('set.cookie_fail', msg='Cookie 还是空的'))
             return
-        self.lb_cookie_state.setText(T('outline.loading'))
-        QApplication.processEvents()
-        try:
-            r = core.check_login(ck)
-        except Exception as e:
-            self.lb_cookie_state.setText(T('set.cookie_fail', msg=str(e)[:70]))
+        if getattr(self, '_ck_worker', None) and self._ck_worker.isRunning():
             return
-        if r.get('ok'):
+        self.btn_cookie_test.setEnabled(False)
+        self.lb_cookie_state.setText(T('outline.loading'))
+        self._ck_worker = FnWorker(lambda: core.check_login(ck), self)
+        self._ck_worker.ok.connect(self._on_test_cookie_ok)
+        self._ck_worker.err.connect(self._on_test_cookie_err)
+        self._ck_worker.start()
+
+    def _on_test_cookie_ok(self, r):
+        self.btn_cookie_test.setEnabled(True)
+        if r and r.get('ok'):
             who = r.get('nick') or r.get('vid')
             self.lb_cookie_state.setText(
                 T('set.cookie_ok_plain', who=who, vid=r.get('vid')))
             self.win.toast(T('set.cookie_ok_plain', who=who, vid=r.get('vid')),
                            kind='ok', hold=4600)
         else:
-            self.lb_cookie_state.setText(
-                T('set.cookie_fail', msg=r.get('note') or '登录态无效'))
-            self.win.toast(T('set.cookie_fail', msg=r.get('note') or '登录态无效'),
+            note = (r or {}).get('note') or '登录态无效'
+            self.lb_cookie_state.setText(T('set.cookie_fail', msg=str(note)[:70]))
+            self.win.toast(T('set.cookie_fail', msg=str(note)[:70]),
                            kind='warn', hold=5200)
+
+    def _on_test_cookie_err(self, msg):
+        self.btn_cookie_test.setEnabled(True)
+        self.lb_cookie_state.setText(T('set.cookie_fail', msg=msg[:70]))
 
     def on_titlebar(self, state):
         if self._loading:
@@ -4943,13 +5185,19 @@ class SettingsPage(QWidget):
         if not hook:
             self.win.toast(T('set.feishu_need'), kind='warn')
             return
-        try:
-            feishu.send_text(
+        # 发 Webhook 是真实网络请求（超时最长 25s），必须丢后台 ——
+        # 主线程等它 = 整个窗口「未响应」。
+        if getattr(self, '_fs_worker', None) and self._fs_worker.isRunning():
+            return
+        self._fs_worker = FnWorker(
+            lambda: feishu.send_text(
                 hook, '书脉 BookPulse · 测试消息\n如果你看到这条，说明 Webhook 配置正确。',
-                secret=settings.get('feishu_secret') or '')
-            self.win.toast(T('set.feishu_sent'), kind='ok')
-        except Exception as e:
-            self.win.toast('%s：%s' % (T('ai.failed'), e), kind='warn')
+                secret=settings.get('feishu_secret') or ''), self)
+        self._fs_worker.ok.connect(lambda _: self.win.toast(
+            T('set.feishu_sent'), kind='ok'))
+        self._fs_worker.err.connect(lambda m: self.win.toast(
+            '%s：%s' % (T('ai.failed'), m[:60]), kind='warn'))
+        self._fs_worker.start()
 
     def on_lang(self, code):
         if self._loading or code == i18n.current():
@@ -5057,6 +5305,10 @@ class TitleBar(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, start_page=0):
         super().__init__()
+        # 无边框标志在这里设置（而不是只在 main() 里）—— 否则 rebuild() 重建的
+        # 新窗口会「有自绘标题栏却保留原生边框」，出现两套最小化/关闭按钮。
+        if settings.get('custom_titlebar'):
+            self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
         self.kb = kb.get_store()
         self.watcher = WATCH.Watcher(self.kb)
         self._caption_done = False
@@ -5264,6 +5516,9 @@ class MainWindow(QMainWindow):
         self.btn_cmd.setCursor(Qt.PointingHandCursor)
         self.btn_cmd.setMinimumWidth(280)
         self.btn_cmd.clicked.connect(self.open_palette)
+        # 「搜索下载」页有自己的搜索框，顶栏这个命令面板入口在那页是重复的
+        # （磊哥反馈像两个搜索按钮）→ 该页隐藏，其余页显示；Ctrl+K 始终可用。
+        self.btn_cmd.setVisible(False)
         h.addWidget(self.btn_cmd)
 
         self.btn_lang = QPushButton('EN' if i18n.is_zh() else '中')
@@ -5582,6 +5837,8 @@ class MainWindow(QMainWindow):
                   'nav.outline', 'nav.exports', 'nav.settings']
         if 0 <= idx < len(titles):
             self.lb_top_title.setText(T(titles[idx]))
+        # 命令面板入口在「搜索下载」页与页面内搜索框重复 → 那页隐藏
+        self.btn_cmd.setVisible(idx != 0)
         self._update_side()
         QTimer.singleShot(70, lambda: self.stagger_in(self.stack.widget(idx)))
         if idx == 2:
@@ -5778,9 +6035,7 @@ def main():
     global CURRENT_WIN
     CURRENT_WIN = MainWindow()
     CURRENT_WIN.setWindowIcon(ic)
-    if settings.get('custom_titlebar'):
-        # 无边框在 show() 之前设置才生效；缩放/贴边由 nativeEvent 兜住
-        CURRENT_WIN.setWindowFlags(CURRENT_WIN.windowFlags() | Qt.FramelessWindowHint)
+    # FramelessWindowHint 已在 MainWindow.__init__ 里按设置设置好
     CURRENT_WIN.show()
     close_splash()
     return app.exec()
