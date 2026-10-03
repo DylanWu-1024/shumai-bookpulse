@@ -23,13 +23,14 @@ from PySide6.QtCore import (
     QPropertyAnimation, QParallelAnimationGroup, QEasingCurve, Property, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFont, QImage, QPainter, QLinearGradient, QPen, QPainterPath,
+    QColor, QFont, QImage, QPainter, QLinearGradient, QRadialGradient,
+    QPen, QPainterPath, QPixmap, QBrush,
 )
 
 import sys as _sys
 from PySide6.QtWidgets import (
     QLabel, QWidget, QFrame, QStackedWidget, QProgressBar, QLineEdit,
-    QListWidget, QListWidgetItem, QVBoxLayout, QHBoxLayout,
+    QListWidget, QListWidgetItem, QVBoxLayout, QHBoxLayout, QLayout,
     QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
 )
 
@@ -45,6 +46,11 @@ MOTION = True
 def set_palette(p):
     global _PAL
     _PAL = p
+
+
+def pal():
+    """取当前调色板 —— 需要在 HTML / 自绘里用主题色时用它，别自己写死颜色。"""
+    return _PAL
 
 
 def set_motion(on):
@@ -190,6 +196,252 @@ class Card(QFrame):
             apply_shadow(self)
         else:
             self.setGraphicsEffect(None)
+
+
+# ==========================================================================
+# 背景装饰层：柔和光晕 + 缓慢漂浮的粒子
+# ==========================================================================
+class BackdropLayer(QWidget):
+    """铺在主内容区底下的装饰层。
+
+    干三件事：铺底色 → 画三团柔和光晕 → 飘几十个小光点。
+    卡片做成半透明（#Card 用 rgba）之后，底下的光晕会透上来 —— 这就是
+    「磨砂玻璃」的观感来源（QSS 没有 backdrop-filter，得自己造）。
+
+    纯 QPainter 自绘、不引任何额外依赖。光晕渲染进缓存位图，每帧只做一次
+    位图合成 + 画几十个小圆，开销很低。关掉「界面动效」粒子就静止；
+    关掉「磨砂玻璃」整层隐藏，根容器自己铺底色。
+    """
+
+    STEP_MS = 45          # ≈22 帧/秒：粒子本来就慢，够顺，也省电
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 只是装饰，绝不能挡住底下的点击
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._back = None
+        self._key = None
+        self._parts = []
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.STEP_MS)
+        self._timer.timeout.connect(self._tick)
+        self._sync()
+
+    # ------------------------------------------------------------ 生命周期
+    def refresh_theme(self):
+        """换主题 / 改尺寸后调用：丢掉缓存位图，重新撒粒子。"""
+        self._back = None
+        self._key = None
+        self._parts = []
+        self._sync()
+        self.update()
+
+    def _sync(self):
+        want = bool(MOTION) and self.isVisible() and bool(_PAL.get('GLASS'))
+        if want and not self._timer.isActive():
+            self._timer.start()
+        elif not want and self._timer.isActive():
+            self._timer.stop()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._sync()
+
+    def hideEvent(self, ev):
+        super().hideEvent(ev)
+        self._sync()
+
+    # ------------------------------------------------------------ 粒子
+    def _seed(self):
+        """按面积撒粒子：窗口大就多几个，但设上限免得大屏上糊成一片。"""
+        import random as _r
+        w, h = max(1, self.width()), max(1, self.height())
+        n = max(14, min(46, int(w * h / 40000)))
+        self._parts = []
+        for _ in range(n):
+            self._parts.append([
+                _r.uniform(210, max(240, w)), _r.uniform(0, h),      # x, y（避开侧栏）
+                _r.uniform(1.4, 4.0),                               # 半径
+                _r.uniform(-0.26, 0.26), _r.uniform(-0.22, 0.22),   # vx, vy
+                _r.uniform(0.30, 1.0),                              # 亮度
+            ])
+
+    def _tick(self):
+        if not self._parts and self.width() > 1:
+            self._seed()
+        w, h = max(1, self.width()), max(1, self.height())
+        lo = 202                     # 侧栏右边缘，粒子只在内容区飘
+        for q in self._parts:
+            q[0] += q[4]
+            q[1] += q[5]
+            if q[0] < lo:
+                q[0] = w + 8
+            elif q[0] > w + 8:
+                q[0] = lo
+            if q[1] < -8:
+                q[1] = h + 8
+            elif q[1] > h + 8:
+                q[1] = -8
+        self.update()
+
+    # ------------------------------------------------------------ 绘制
+    def _render_glow(self, rect, pal):
+        """把底色上的「点阵纹理 + 三团柔和光晕」渲染进一张缓存位图。
+
+        只在尺寸或配色变化时重算，所以每帧的实际开销只是贴一张图 + 画几十个小圆。
+        光晕中心特意偏右、偏下：左侧 200px 会被侧栏盖住，光晕放那儿纯属浪费。
+        """
+        pm = QPixmap(rect.size())
+        pm.fill(Qt.transparent)
+        g = QPainter(pm)
+        g.setRenderHint(QPainter.Antialiasing, True)
+        g.setPen(Qt.NoPen)
+        w, h = rect.width(), rect.height()
+        dark = bool(pal.get('DARK'))
+        c1 = QColor(pal.get('PRIMARY') or '#6366F1')
+        c2 = QColor(pal.get('ACCENT') or c1.name())
+
+        # ① 极淡的点阵纹理 —— 让大片空白有"材质"，但又几乎注意不到
+        dot = QColor(pal.get('ink') or '#000000')
+        dot.setAlpha(18 if dark else 13)
+        g.setBrush(dot)
+        step = 26
+        x0, y0 = 214, 14          # 从侧栏右侧开始，少画一堆被挡住的点
+        for yy in range(y0, h, step):
+            for xx in range(x0, w, step):
+                # 隔行错位，看起来像细密网点而不是方格纸
+                g.drawEllipse(QPointF(xx + (step // 2 if (yy // step) % 2 else 0),
+                                      yy), 1.0, 1.0)
+
+        # ② 三团柔和光晕
+        a1 = 56 if dark else 42
+        a2 = 42 if dark else 30
+        spots = (
+            (w * 0.42, h * 0.00, max(w, h) * 0.62, c1, a1),   # 上中
+            (w * 0.97, h * 0.26, max(w, h) * 0.54, c2, a2),   # 右中
+            (w * 0.70, h * 1.04, max(w, h) * 0.64, c1, a2),   # 右下
+        )
+        for cx, cy, rad, col, alpha in spots:
+            grad = QRadialGradient(QPointF(cx, cy), rad)
+            # 分三段衰减（0 → 35% → 0）而不是线性两段：
+            # 线性衰减在浅色背景上能看出圆形的边，中间多一段就化开了
+            inner = QColor(col)
+            inner.setAlpha(alpha)
+            mid = QColor(col)
+            mid.setAlpha(int(alpha * 0.34))
+            outer = QColor(col)
+            outer.setAlpha(0)
+            grad.setColorAt(0.0, inner)
+            grad.setColorAt(0.5, mid)
+            grad.setColorAt(1.0, outer)
+            g.setBrush(QBrush(grad))
+            g.drawEllipse(QPointF(cx, cy), rad, rad)
+        g.end()
+        return pm
+
+    def paintEvent(self, ev):
+        pal = _PAL
+        rect = self.rect()
+        if rect.width() < 4 or rect.height() < 4:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.fillRect(rect, QColor(pal.get('bg') or '#FFFFFF'))
+
+        key = (rect.width(), rect.height(), pal.get('PRIMARY'),
+               pal.get('ACCENT'), pal.get('bg'), pal.get('DARK'))
+        if self._back is None or self._key != key:
+            self._back = self._render_glow(rect, pal)
+            self._key = key
+        p.drawPixmap(0, 0, self._back)
+
+        if not pal.get('GLASS'):
+            p.end()
+            return
+
+        if not self._parts:
+            self._seed()
+        base = QColor(pal.get('PRIMARY') or '#6366F1')
+        accent = QColor(pal.get('ACCENT') or base.name())
+        top = 108 if pal.get('DARK') else 74
+        p.setPen(Qt.NoPen)
+        for i, q in enumerate(self._parts):
+            c = QColor(accent if i % 3 == 0 else base)
+            c.setAlpha(max(8, int(top * q[5])))
+            p.setBrush(c)
+            p.drawEllipse(QPointF(q[0], q[1]), q[2], q[2])
+        p.end()
+
+
+# ==========================================================================
+# 自动换行的水平布局
+# ==========================================================================
+class FlowLayout(QLayout):
+    """像网页那样「一行放不下就自动换行」的布局。
+
+    背景：导出格式那排复选框原来是写死的 QHBoxLayout。窗口一窄，Qt 会把
+    每个复选框压扁，`HTML` 被裁成 `HTM`、`JSON` 被裁成 `JSO` —— 难看且费解。
+    Qt 自带的布局没有换行能力，所以自己写一个（实现很直白，就一遍扫描）。
+    """
+
+    def __init__(self, parent=None, spacing=10):
+        super().__init__(parent)
+        self._items = []
+        self._sp = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    # ---- QLayout 要求的一堆小接口 ----
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._layout(QRect(0, 0, w, 0), test=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._layout(rect, test=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return s + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    # ---- 真正干活：一遍扫描，超宽就换行 ----
+    def _layout(self, rect, test):
+        m = self.contentsMargins()
+        box = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_h = box.x(), box.y(), 0
+        for it in self._items:
+            sz = it.sizeHint()
+            if x + sz.width() > box.right() + 1 and line_h > 0:
+                x = box.x()
+                y += line_h + self._sp
+                line_h = 0
+            if not test:
+                it.setGeometry(QRect(QPoint(x, y), sz))
+            x += sz.width() + self._sp
+            line_h = max(line_h, sz.height())
+        return y + line_h - rect.y() + m.bottom()
 
 
 # ==========================================================================

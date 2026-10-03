@@ -13,6 +13,7 @@ DEFAULTS = {
     'mode': 'light',         # light / dark
     'radius': 12,            # 圆角大小
     'motion': True,          # 界面动效开关（关掉更安静也更省电）
+    'glass': True,           # 磨砂玻璃质感（半透明卡片 + 背景光晕与粒子）
     'def_count': 100,        # 默认导出条数（0 = 全部）
     'sort_mode': 'hot',      # 结果排序：hot = 按划线人数降序；chapter = 按章节顺序
     'def_format': 'html',    # 上次选用的单格式

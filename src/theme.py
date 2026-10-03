@@ -45,6 +45,10 @@ NEUTRALS = {
         'success': '#10B981', 'warn': '#F59E0B',
         'scrim': 'rgba(20,18,45,0.38)',
         'scrim_rgba': (20, 18, 45, 97),
+        # 磨砂玻璃：卡片半透明、顶部一条高光边，好让底下的光晕透上来
+        'card_glass': 'rgba(255,255,255,0.74)',
+        'card_hi': 'rgba(255,255,255,0.95)',
+        'glass_on': True,
     },
     'dark': {
         'bg': '#12111F', 'card': '#1C1B2E', 'ink': '#EDEDF7', 'ink_sub': '#C7C9DE',
@@ -58,6 +62,9 @@ NEUTRALS = {
         'success': '#34D399', 'warn': '#FBBF24',
         'scrim': 'rgba(0,0,0,0.55)',
         'scrim_rgba': (0, 0, 0, 140),
+        'card_glass': 'rgba(30,29,50,0.72)',
+        'card_hi': 'rgba(255,255,255,0.10)',
+        'glass_on': True,
     },
 }
 
@@ -105,8 +112,13 @@ def resolve_mode(mode):
     return mode if mode in ('light', 'dark') else 'light'
 
 
-def palette(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12):
-    """把主色系和中性色系合成一份完整调色板。"""
+def palette(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12, glass=True):
+    """把主色系和中性色系合成一份完整调色板。
+
+    glass=False 时把卡片还原成实心、根容器自己负责底色 ——
+    相当于整条磨砂玻璃链路整体关掉，而不是半开（半开会出现
+    「卡片半透明但背后什么都没有」的灰蒙蒙效果）。
+    """
     acc = ACCENTS.get(theme) or ACCENTS[DEFAULT_THEME]
     neu = NEUTRALS.get(mode) or NEUTRALS[DEFAULT_MODE]
     p = dict(neu)
@@ -119,6 +131,14 @@ def palette(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12):
     if mode == 'dark':
         p['PRIMARY_SOFT'] = _mix(acc['p'], '#12111F', 0.80)
     p['INK'] = p['ink']
+    p['GLASS'] = bool(glass)
+    p['DARK'] = (mode == 'dark')
+    if not glass:
+        p['card_glass'] = p['card']
+        p['card_hi'] = p['line']
+        p['root_bg'] = p['bg']          # 关掉玻璃时由根容器自己铺底
+    else:
+        p['root_bg'] = 'transparent'    # 开着时底色由背景层画（它才能透出光晕）
     return p
 
 
@@ -128,7 +148,7 @@ def palette(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12):
 _QSS_TEMPLATE = """
 * { font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif; }
 
-#Root { background: %(bg)s; }
+#Root { background: %(root_bg)s; }
 
 /* 无边框模式下的自绘标题栏（与侧栏同色，整体感更强） */
 #TitleBar { background: %(side_top)s; }
@@ -172,7 +192,7 @@ _QSS_TEMPLATE = """
 #SideKbd { color: %(side_muted)s; font-size: 10.5px; padding: 0 18px 16px 18px; }
 
 /* ------------------------------------------------------------ 顶栏（工具栏） */
-#TopBar { background: %(card)s; border-bottom: 1px solid %(line)s; }
+#TopBar { background: %(card_glass)s; border-bottom: 1px solid %(line)s; }
 #TopTitle { color: %(INK)s; font-size: 15px; font-weight: 600; }
 #TopSub { color: %(muted)s; font-size: 11.5px; }
 #ToolBtn {
@@ -213,9 +233,9 @@ _QSS_TEMPLATE = """
 #SectionTitle { color: %(ink_sub)s; font-size: 13.5px; font-weight: 600; }
 
 /* ------------------------------------------------------------ 卡片 */
-#Card { background: %(card)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
+#Card { background: %(card_glass)s; border: 1px solid %(line)s; border-top: 1px solid %(card_hi)s; border-radius: %(RADIUS)spx; }
 #CardFlat { background: %(hover)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
-#CardHover { background: %(card)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
+#CardHover { background: %(card_glass)s; border: 1px solid %(line)s; border-radius: %(RADIUS)spx; }
 #CardHover:hover { border: 1px solid %(border_hl)s; }
 
 /* ------------------------------------------------------------ 输入控件 */
@@ -331,6 +351,15 @@ QPlainTextEdit#PromptBox {
 }
 QPlainTextEdit#PromptBox:focus { border: 1px solid %(PRIMARY)s; }
 
+/* ------------------------------------------------------------ AI 大纲正文
+   用 QTextBrowser 渲染富文本（四层结构），背景交给外层卡片，
+   自己保持透明、无边框，避免出现一个「框里的框」。 */
+QTextBrowser#OutlineView {
+    background: transparent; border: none;
+    padding: 2px 8px 2px 2px; font-size: 14px;
+}
+#Legend { color: %(muted)s; font-size: 11.5px; padding-left: 10px; }
+
 /* ------------------------------------------------------------ 滚动条 */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical {
@@ -385,9 +414,9 @@ QScrollBar::handle:horizontal:hover { background: %(muted)s; }
 """
 
 
-def build_qss(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12):
-    """生成完整样式表。换主题 / 换模式 / 改圆角时重新调用即可。"""
-    p = palette(theme, mode, radius)
+def build_qss(theme=DEFAULT_THEME, mode=DEFAULT_MODE, radius=12, glass=True):
+    """生成完整样式表。换主题 / 换模式 / 改圆角 / 开关玻璃质感时重新调用即可。"""
+    p = palette(theme, mode, radius, glass)
     return _QSS_TEMPLATE % p
 
 

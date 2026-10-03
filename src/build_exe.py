@@ -91,6 +91,27 @@ def build(mode):
     return r.returncode
 
 
+def sanitize_dist():
+    """分发包卫生检查：绝不能把用户数据（书库、设置、登录信息）打包发出去。
+
+    这些目录是在「分发版」目录里试跑 exe 时自动生成的。试完必须清掉 ——
+    否则把整个文件夹发给朋友时，会连你的书库和登录凭据一起送出去。
+    """
+    root = os.path.dirname(HERE)                 # 项目根
+    out = os.path.join(root, '分发版')
+    removed = []
+    if os.path.isdir(out):
+        for name in ('data', 'exports'):
+            d = os.path.join(out, name)
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(name)
+    if removed:
+        print('\n[卫生检查] 已从「分发版」移除用户数据目录：%s' % '、'.join(removed))
+        print('           这些是试跑 exe 时生成的，绝不能跟着发出去。')
+    return removed
+
+
 def main():
     if not os.path.exists(VENV_PY):
         print('[ERROR] 找不到 .venv，请先双击 setup_env.bat')
@@ -113,6 +134,7 @@ def main():
         print('  单文件：%s  (%.1f MB)' % (p1, os.path.getsize(p1) / 1048576.0))
     if os.path.exists(p2):
         print('  快速版：%s' % p2)
+    sanitize_dist()
     return 1 if rc else 0
 
 

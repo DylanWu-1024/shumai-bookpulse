@@ -129,15 +129,16 @@ from PySide6.QtGui import (QDesktopServices, QFont, QIcon, QKeySequence, QShortc
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
-    QTableWidget, QTableWidgetItem, QPlainTextEdit, QFrame, QDialog,
+    QTableWidget, QTableWidgetItem, QPlainTextEdit, QTextBrowser, QFrame,
+    QDialog, QStackedLayout,
     QHeaderView, QAbstractItemView, QMessageBox, QButtonGroup, QSplitter,
     QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QCompleter, QFileDialog,
     QScrollArea, QTreeWidget, QTreeWidgetItem, QProgressBar,
-    QStyledItemDelegate, QStyle, QMenu, QGraphicsOpacityEffect,
+    QStyledItemDelegate, QStyle, QMenu, QGraphicsOpacityEffect, QSizePolicy,
 )
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
-APP_VERSION = '2.4'
+APP_VERSION = '2.5'
 
 
 # ==========================================================================
@@ -252,14 +253,29 @@ def _cell(text, center=False):
     return it
 
 
+def wrap_label(text='', name='Hint'):
+    """一个「允许被压缩的多行说明」标签。
+
+    中文没有词间空格，Qt 的 QLabel 会把整段文字当成一个不可断开的词，
+    于是 minimumSizeHint 直接等于整段宽度（实测有 1144px）—— 放进两列布局
+    会把整个滚动区撑到 2215px，卡片就一列一列地铺开了。
+    设成 Ignored + 最小宽度 1 之后：宽度交给父布局分配，折行交给 wordWrap。
+    """
+    lb = QLabel(text)
+    if name:
+        lb.setObjectName(name)
+    lb.setWordWrap(True)
+    lb.setMinimumWidth(1)
+    lb.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    return lb
+
+
 def page_header(title, desc):
     box = QVBoxLayout()
     box.setSpacing(3)
     t = QLabel(title)
     t.setObjectName('PageTitle')
-    d = QLabel(desc)
-    d.setObjectName('PageDesc')
-    d.setWordWrap(True)
+    d = wrap_label(desc, 'PageDesc')
     box.addWidget(t)
     box.addWidget(d)
     return box
@@ -754,6 +770,14 @@ class SearchPage(QWidget):
         self.btn_queue.clicked.connect(self.to_queue)
         acts.addWidget(self.btn_queue)
 
+        # 抓完的这一本，直接能去看它的 AI 大纲（不用先去书库再跳一次）
+        self.btn_to_outline = QPushButton('\U0001F4DA  ' + T('search.to_outline'))
+        self.btn_to_outline.setProperty('flat', True)
+        self.btn_to_outline.setEnabled(False)
+        self.btn_to_outline.setToolTip(T('search.to_outline_tip'))
+        self.btn_to_outline.clicked.connect(self.to_outline)
+        acts.addWidget(self.btn_to_outline)
+
         self.btn_copy = QPushButton(T('search.copy'))
         self.btn_copy.setProperty('flat', True)
         self.btn_copy.setEnabled(False)
@@ -921,12 +945,13 @@ class SearchPage(QWidget):
         except Exception:
             pass
         if sid:
+            self.btn_to_outline.setEnabled(True)     # 已入库，可以去看它的大纲了
             self.win.toast(T('toast.fetch_ok', title=r['book']['title'], n=r['all_count']),
                            kind='ok', hold=3000)
         else:
             self.win.toast(T('toast.fetch_ok_nodb', title=r['book']['title'], n=r['all_count']),
                            kind='warn', hold=3400)
-        self.win.refresh_library()
+        self.win.refresh_library(r['book'].get('bookId'))
 
     def _on_fetch_err(self, msg):
         self.btn_fetch.setEnabled(True)
@@ -952,6 +977,15 @@ class SearchPage(QWidget):
         self.btn_queue.setEnabled(True)
         self.btn_copy.setEnabled(True)
         self.btn_map.setEnabled(True)
+        # 只有「抓过的书」（本地书库里真有它）才谈得上去看 AI 大纲
+        self.btn_to_outline.setEnabled(bool(from_cache))
+
+    def to_outline(self):
+        """带着当前这本书跳到 AI 大纲页。"""
+        if not self.result:
+            return
+        b = self.result.get('book') or {}
+        self.win.goto_outline(b.get('bookId'), b.get('title') or '')
 
     def _open_url(self, url, tip):
         if not url:
@@ -1786,7 +1820,11 @@ class LibraryPage(QWidget):
         b7.setProperty('flat', True)
         b7.setToolTip(T('insight.watch_empty_desc'))
         b7.clicked.connect(self.toggle_watch)
-        for b in (b1, b2, b3, b4, b6, b7):
+        # 直接跳到 AI 大纲页并选中这本书 —— 书库是"入口"，大纲是它能去的地方之一
+        b8 = QPushButton('\U0001F4DA  ' + T('lib.to_outline'))
+        b8.setProperty('flat', True)
+        b8.clicked.connect(self.to_outline)
+        for b in (b1, b2, b3, b4, b6, b7, b8):
             tools.addWidget(b)
         tools.addStretch(1)
         tools.addWidget(b5)
@@ -1873,6 +1911,29 @@ class LibraryPage(QWidget):
         if not it:
             return None, None
         return it.data(Qt.UserRole), it.text()
+
+    def select_book(self, book_id):
+        """在表格里定位并选中某本书（从别的页面跳过来时用）。"""
+        if book_id in (None, ''):
+            return False
+        want = str(book_id)
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it is None:
+                continue
+            if str(it.data(Qt.UserRole)) == want:
+                self.table.selectRow(r)
+                self.table.scrollToItem(it)
+                return True
+        return False
+
+    def to_outline(self):
+        """带着当前这本书跳到 AI 大纲页 —— 书库是入口，大纲是它能去的地方之一。"""
+        bid, title = self._selected()
+        if not bid:
+            self.win.toast(T('toast.pick_book'), kind='warn')
+            return
+        self.win.goto_outline(bid, title)
 
     def open_preview(self):
         bid, title = self._selected()
@@ -2869,6 +2930,9 @@ class InsightPage(QWidget):
         self.tbl.setColumnWidth(0, 190)
         self.tbl.setColumnWidth(1, 130)
         self.tbl.setColumnWidth(2, 90)
+        self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tbl.customContextMenuRequested.connect(self._hit_menu)
+        self.tbl.doubleClicked.connect(self._goto_book)
         self.tbl.hide()
 
         self.empty_search = W.EmptyState(T('insight.search_empty'),
@@ -2898,6 +2962,8 @@ class InsightPage(QWidget):
         for i, r in enumerate(rows):
             it = _cell(r.get('title') or '')
             it.setToolTip(r.get('author') or '')
+            # 记住它属于哪本书 —— 双击就能跳到书库里的这一本
+            it.setData(Qt.UserRole, r.get('book_id'))
             self.tbl.setItem(i, 0, it)
             self.tbl.setItem(i, 1, _cell(r.get('chapter') or ''))
             self.tbl.setItem(i, 2, _cell(str(r.get('people') or 0), center=True))
@@ -2906,6 +2972,31 @@ class InsightPage(QWidget):
             self.tbl.setItem(i, 3, c)
         self.empty_search.hide()
         self.tbl.show()
+
+    def _hit_book_id(self, row):
+        it = self.tbl.item(row, 0)
+        return it.data(Qt.UserRole) if it is not None else None
+
+    def _goto_book(self, idx):
+        """双击一条结果 → 跳到本地书库并定位那本书（看看它的全部划线）。"""
+        self.win.goto_library(self._hit_book_id(idx.row()))
+
+    def _hit_menu(self, pos):
+        r = self.tbl.indexAt(pos).row()
+        if r < 0:
+            return
+        bid = self._hit_book_id(r)
+        m = QMenu(self)
+        a1 = m.addAction(T('insight.go_library'))
+        a2 = m.addAction(T('insight.copy_text'))
+        picked = m.exec(self.tbl.viewport().mapToGlobal(pos))
+        if picked == a1:
+            self.win.goto_library(bid)
+        elif picked == a2:
+            c = self.tbl.item(r, 3)
+            if c is not None:
+                QApplication.clipboard().setText(c.text())
+                self.win.toast(T('outline.copied'), kind='ok')
 
     # ---------------------------------------------------------- 标签 2：聚合
     def _build_theme(self):
@@ -3179,6 +3270,10 @@ class OutlineWorker(QThread):
     在此之前一直用 `/web/book/outline/inner`（恒 403，带有效 Cookie 也一样），
     绕了很久 —— 那个接口不是浏览器实际调用的。
 
+    ⚠️ 这条路径**刻意不携带任何 Cookie**：实测两个接口都免登录，所以没有理由
+    把用户的登录凭据发出去。服务端因此无法把这个请求归因到任何账号。
+    （设置里那个 Cookie 框只服务于「测试连接」这一项自检。）
+
     只发两次请求：check 拿章节列表 → outline 一次拿全部内容。
     """
     stage = Signal(str)
@@ -3186,10 +3281,9 @@ class OutlineWorker(QThread):
     done = Signal(list, list, str)      # 解析后的树, 章节列表, 错误
     fail = Signal(str)
 
-    def __init__(self, book_id, cookie='', parent=None):
+    def __init__(self, book_id, parent=None):
         super().__init__(parent)
         self.book_id = str(book_id)
-        self.cookie = cookie or ''
         self._stop = False
 
     def stop(self):
@@ -3198,16 +3292,14 @@ class OutlineWorker(QThread):
     def run(self):
         try:
             self.stage.emit('check')
-            chapters = core.fetch_outline_chapters(self.book_id,
-                                                   cookie=self.cookie)
+            chapters = core.fetch_outline_chapters(self.book_id)
             if self._stop:
                 return
             uids = [c.get('chapterUid') for c in chapters
                     if c.get('chapterUid') is not None]
             self.stage.emit('content')
             self.progress.emit(0, max(1, len(uids)))
-            raw = core.fetch_outline_all(self.book_id, uids,
-                                         cookie=self.cookie)
+            raw = core.fetch_outline_all(self.book_id, uids)
             if self._stop:
                 return
             tree = core.outline_tree(raw)
@@ -3280,6 +3372,10 @@ class OutlinePage(QWidget):
         rh = QHBoxLayout()
         rh.setSpacing(8)
         rh.addWidget(_tag(T('outline.content')))
+        # 层次图例：一眼看出每级长什么样（和正文用的是同一套样式）
+        self.lb_legend = QLabel(T('outline.legend'))
+        self.lb_legend.setObjectName('Legend')
+        rh.addWidget(self.lb_legend)
         rh.addStretch(1)
         self.btn_copy = QPushButton(T('outline.copy'))
         self.btn_copy.setProperty('flat', True)
@@ -3298,9 +3394,13 @@ class OutlinePage(QWidget):
         rh.addWidget(self.btn_export)
         rv.addLayout(rh)
 
-        self.ed = QPlainTextEdit()
+        # 用 QTextBrowser 而不是 QPlainTextEdit —— 纯文本控件没法表现
+        # 「大标题 / 小节 / 要点 / 细节」这四级层次，而这正是 AI 大纲的价值所在。
+        self.ed = QTextBrowser()
         self.ed.setReadOnly(True)
-        self.ed.setObjectName('SendBox')
+        self.ed.setObjectName('OutlineView')
+        self.ed.setFrameShape(QFrame.NoFrame)
+        self.ed.setOpenExternalLinks(False)
         self.ed.setPlaceholderText(T('outline.pick_chapter'))
         rv.addWidget(self.ed, 1)
         split.addWidget(rcard)
@@ -3333,6 +3433,22 @@ class OutlinePage(QWidget):
                 self.lb_state.setText('')
         except Exception as e:
             print('[OutlinePage] refresh error:', e, file=sys.stderr)
+
+    def select_book(self, book_id):
+        """选中某本书（从书库页 / 搜索页跳过来时用）。"""
+        if book_id in (None, ''):
+            return False
+        cands = [book_id, str(book_id)]
+        try:
+            cands.append(int(book_id))
+        except (TypeError, ValueError):
+            pass
+        for c in cands:
+            i = self.cb_book.findData(c)
+            if i >= 0:
+                self.cb_book.setCurrentIndex(i)
+                return True
+        return False
 
     def _current_book(self):
         """当前选中的书 → (book_id, 干净书名)。"""
@@ -3394,11 +3510,12 @@ class OutlinePage(QWidget):
         self.btn_stop.setEnabled(True)
         self.lb_state.setText(T('outline.loading'))
         self.list.clear()
-        self.ed.setPlainText('')
+        self.ed.setHtml('')
+        self._cur_node = None
         self.chapters, self.tree, self.by_uid = [], [], {}
         self.empty.hide()
 
-        self.worker = OutlineWorker(str(bid), self._cookie(), self)
+        self.worker = OutlineWorker(str(bid), self)
         self.worker.stage.connect(self._on_stage)
         self.worker.progress.connect(self._on_progress)
         self.worker.done.connect(self._on_done)
@@ -3497,6 +3614,18 @@ class OutlinePage(QWidget):
                 break
 
     # ------------------------------------------------------------------ 交互
+    def _colors(self):
+        """主题色 → 大纲层级色。换主题时自动跟着变，不用改这里。"""
+        p = W.pal()
+        return {
+            'title': p.get('PRIMARY_L') or p.get('PRIMARY') or '#4C1D95',
+            'sub': p.get('ink') or '#1E1B4B',
+            'point': p.get('ink_sub') or '#37395C',
+            'detail': p.get('muted') or '#6B6F8C',
+            'rule': p.get('line') or '#DDD9F5',
+            'dot': p.get('PRIMARY') or '#7C3AED',
+        }
+
     def on_pick(self, row):
         if row < 0:
             return
@@ -3509,14 +3638,30 @@ class OutlinePage(QWidget):
         except (TypeError, ValueError):
             pass
         node = self.by_uid.get(uid)
-        name = (it.text() or '').strip('\u25CF ').strip()
+        c = self._colors()
         if node:
-            self.ed.setPlainText('【%s】\n\n%s' % (
-                core.outline_chapter_title(node) or name,
-                core.outline_chapter_text(node, with_title=False)))
+            # 章标题左侧列表已经有了，这里不再重复；万一去掉后没内容就保留
+            html = core.outline_chapter_html(node, c, with_title=False).strip()
+            if not html:
+                html = core.outline_chapter_html(node, c, with_title=True)
+            self.ed.setHtml(html)
+            self.ed.verticalScrollBar().setValue(0)
         else:
-            self.ed.setPlainText('【%s】\n\n%s' % (name, T('outline.none')))
+            self.ed.setHtml(
+                '<p style="color:%s;font-size:14px;margin-top:13px">%s</p>'
+                % (c['detail'], core.esc(T('outline.none'))))
         self.btn_copy.setEnabled(bool(node))
+        self._cur_node = node          # 「复制本章」用它取带层级的纯文本
+
+    def repaint_content(self):
+        """换主题后重渲染当前章。
+
+        QSS 管的控件会自动跟着主题变，但大纲正文是 HTML、颜色写在标签里，
+        不重渲染就会停在旧配色上。
+        """
+        row = self.list.currentRow()
+        if row >= 0:
+            self.on_pick(row)
 
     def _md_blocks(self):
         """已取到的章节 → [(章名, Markdown 片段)]，保持书内顺序。"""
@@ -3528,7 +3673,10 @@ class OutlinePage(QWidget):
         return head + '\n\n'.join(md for _, md in self._md_blocks())
 
     def copy_chapter(self):
-        t = self.ed.toPlainText()
+        node = getattr(self, '_cur_node', None)
+        if not node:
+            return
+        t = core.outline_chapter_text(node, with_title=True)
         if not t.strip():
             return
         QApplication.clipboard().setText(t)
@@ -3547,43 +3695,9 @@ class OutlinePage(QWidget):
         title = self.book_title
 
         if ext == '.html':
-            secs = []
-            for name, md in self._md_blocks():
-                body = []
-                for line in md.split('\n'):
-                    s = line.rstrip()
-                    if not s.strip() or s.lstrip().startswith('#'):
-                        continue            # 章标题单独渲染，正文里跳过
-                    t = s.strip()
-                    if t.startswith('  - '):
-                        body.append('<p class="l4">%s</p>' % core.esc(t[4:]))
-                    elif t.startswith('- '):
-                        body.append('<p class="l3">%s</p>' % core.esc(t[2:]))
-                    elif t.startswith('**') and t.endswith('**'):
-                        body.append('<p class="l2">%s</p>' % core.esc(t.strip('*')))
-                    else:
-                        body.append('<p>%s</p>' % core.esc(t))
-                secs.append('<section><h2>%s</h2>%s</section>'
-                            % (core.esc(name), ''.join(body)))
-            return (
-                '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
-                '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                '<title>%s · AI 大纲</title><style>'
-                'body{margin:0;background:#f4f6f8;font:16px/1.85 -apple-system,'
-                '"PingFang SC","Microsoft YaHei",sans-serif;color:#222}'
-                'header{background:linear-gradient(135deg,#6366F1,#7C3AED);'
-                'color:#fff;padding:32px 20px}h1{margin:0;font-size:22px}'
-                'main{max-width:760px;margin:24px auto;padding:0 16px}'
-                'section{background:#fff;border-radius:12px;padding:18px 20px;'
-                'margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.05)}'
-                'section h2{margin:0 0 10px;font-size:16px;color:#4C1D95}'
-                'section p{margin:6px 0;font-size:15.5px;line-height:1.9}'
-                'section p.l2{font-weight:600;color:#312E81;margin-top:14px}'
-                'section p.l3{padding-left:4px}'
-                'section p.l4{padding-left:22px;color:#555;font-size:14.5px}'
-                '</style></head><body><header><h1>《%s》· AI 大纲</h1></header>'
-                '<main>%s</main></body></html>'
-                % (core.esc(title), core.esc(title), ''.join(secs)))
+            # 和界面里用的是同一套层级渲染 —— 导出的网页打开就是你在程序里看到的样子
+            return core.outline_book_html(self._ordered_nodes(),
+                                          title=title, colors=self._colors())
 
         if ext == '.txt':
             out = ['《%s》· AI 大纲' % title, '']
@@ -3753,9 +3867,56 @@ class SettingsPage(QWidget):
         super().__init__()
         self.win = win
         self._loading = True
+        self._rebalanced = False
         self._build()
         self._loading = False
         self._sync_cookie_keys()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # 构建时卡片还没布局过，换行说明的真实高度要等显示后才知道，
+        # 所以首次显示后用**真实高度**再平衡一次（只做一次，用户无感）。
+        if not self._rebalanced:
+            self._rebalanced = True
+            QTimer.singleShot(0, self._refine_balance)
+
+    def _refine_balance(self):
+        """首次显示后按真实高度精修两列。"""
+        from PySide6.QtWidgets import QScrollArea
+        sa = self.findChild(QScrollArea)
+        if sa is None or sa.widget() is None:
+            return
+        lay = sa.widget().layout()
+        if lay is None or lay.count() < 2:
+            return
+        # 列容器是 _build 里包好的两个 QWidget（每个内含「若干卡片 + stretch」）
+        boxes = []
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is not None and w.layout() is not None and w.layout().count() >= 2:
+                boxes.append(w)
+        if len(boxes) < 2:
+            return
+        c1, c2 = boxes[0].layout(), boxes[1].layout()
+
+        def drain(L):
+            ws = []
+            while L.count():
+                it = L.takeAt(0)
+                w = it.widget()
+                if w is not None:
+                    ws.append(w)
+            return ws
+
+        cards = drain(c1) + drain(c2)
+        cols, loaded = (c1, c2), [0, 0]
+        for c in cards:
+            i = 0 if loaded[0] <= loaded[1] else 1
+            cols[i].addWidget(c)
+            loaded[i] += max(c.height(), c.sizeHint().height(), 40)
+        for col in cols:
+            col.addStretch(1)
+
 
     def _sync_cookie_keys(self):
         """把「识别到哪些关键字段」实时显示出来，用户一眼知道有没有粘对。"""
@@ -3778,9 +3939,40 @@ class SettingsPage(QWidget):
         return lb
 
     def _hint(self, text):
-        lb = QLabel(text)
-        lb.setObjectName('Hint')
-        return lb
+        return wrap_label(text, 'Hint')
+
+    def _rebalance_columns(self, col1, col2):
+        """把设置卡片按**真实高度**重新分到两列。
+
+        之前是手工分的（左列 3 张、右列 7 张），结果右列拖得老长、左列一大片空白，
+        整个页面看着就是歪的。改成贪心：每次把下一张卡放进「当前更矮」的那一列 ——
+        以后往任何一张卡里加内容，平衡都会自动跟上，不用再手工挪。
+        """
+        def drain(lay):
+            ws = []
+            while lay.count():
+                it = lay.takeAt(0)
+                w = it.widget()
+                if w is not None:          # 跳过 addStretch 产生的 spacer
+                    ws.append(w)
+            return ws
+
+        def height_of(c):
+            h = max(c.sizeHint().height(), 40)
+            if c.height() > h:             # 已经布局过的话，实际高度更准
+                h = c.height()
+            return h
+
+        cards = drain(col1) + drain(col2)
+        if not cards:
+            return
+        cols, loaded = (col1, col2), [0, 0]
+        for c in cards:
+            i = 0 if loaded[0] <= loaded[1] else 1
+            cols[i].addWidget(c)
+            loaded[i] += height_of(c)
+        for col in cols:
+            col.addStretch(1)
 
     def _row(self, label, widget, hint='', max_w=None):
         """一行设置：标签 + 控件（+ 说明）。
@@ -3794,11 +3986,10 @@ class SettingsPage(QWidget):
         box.addWidget(_tag(label))
         if max_w is None:
             if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                # 数字框保持窄：拉满反而难对齐、也容易误以为能填很多东西
                 max_w = 132
-            elif isinstance(widget, QComboBox):
-                max_w = 300
-            elif isinstance(widget, QLineEdit):
-                max_w = 380
+            # QLineEdit / QComboBox 不再设上限 —— 让它们撑满卡片。
+            # 「设置页内容都挤在左边、右边一大片空白」主要就是这里限宽造成的。
         if max_w:
             try:
                 widget.setMaximumWidth(int(max_w))
@@ -3900,6 +4091,12 @@ class SettingsPage(QWidget):
         self.cb_motion.stateChanged.connect(self.on_motion)
         av.addWidget(self.cb_motion)
 
+        self.cb_glass = QCheckBox(T('set.glass'))
+        self.cb_glass.setChecked(bool(settings.get('glass')))
+        self.cb_glass.stateChanged.connect(self.on_glass)
+        av.addWidget(self.cb_glass)
+        av.addWidget(self._hint(T('set.glass_hint')))
+
         self.cb_titlebar = QCheckBox(T('set.titlebar'))
         self.cb_titlebar.setChecked(bool(settings.get('custom_titlebar')))
         self.cb_titlebar.stateChanged.connect(self.on_titlebar)
@@ -3993,9 +4190,9 @@ class SettingsPage(QWidget):
             lambda v: settings.set_value('open_after_export', bool(v)))
         bv.addWidget(self.cb_open_after)
 
-        # 导出格式（可多选）
-        fmt_row = QHBoxLayout()
-        fmt_row.setSpacing(12)
+        # 导出格式（可多选）—— 用会自动换行的布局，
+        # 否则列一窄，Qt 会把每个复选框压扁，HTML 被裁成 HTM、JSON 裁成 JSO
+        fmt_row = W.FlowLayout(spacing=12)
         self.fmt_checks = {}
         picked = settings.get('export_formats') or ['html']
         for k in core.FORMATS:
@@ -4004,9 +4201,6 @@ class SettingsPage(QWidget):
             cb.stateChanged.connect(self.on_formats)
             self.fmt_checks[k] = cb
             fmt_row.addWidget(cb)
-        fmt_row.addStretch(1)
-        # 注意：这一行【不设】宽度上限 —— 复选框文字会被裁成 HTM / JSO，
-        # 让它按内容自适应。
         bv.addLayout(self._row(T('set.formats'), self._wrap(fmt_row),
                                T('set.formats_hint'), 0))
 
@@ -4276,11 +4470,10 @@ class SettingsPage(QWidget):
         self.ed_cookie.setPlaceholderText(T('set.cookie_ph'))
         self.ed_cookie.textChanged.connect(self.on_cookie)
         wv.addLayout(self._row(T('set.cookie'), self.ed_cookie))
-        self.lb_cookie_keys = QLabel('')
-        self.lb_cookie_keys.setObjectName('Hint')
-        self.lb_cookie_keys.setWordWrap(True)
+        self.lb_cookie_keys = wrap_label('', 'Hint')
         wv.addWidget(self.lb_cookie_keys)
         wv.addWidget(self._hint(T('set.cookie_howto')))
+        wv.addWidget(self._hint(T('set.cookie_local_note')))
         wr_row = QHBoxLayout()
         wr_row.setSpacing(8)
         b_ct = QPushButton(T('set.cookie_test'))
@@ -4288,10 +4481,13 @@ class SettingsPage(QWidget):
         b_ct.setCursor(Qt.PointingHandCursor)
         b_ct.clicked.connect(self.on_test_cookie)
         wr_row.addWidget(b_ct)
+        b_clr = QPushButton(T('set.cookie_clear'))
+        b_clr.setProperty('ghost', True)
+        b_clr.setCursor(Qt.PointingHandCursor)
+        b_clr.clicked.connect(self.on_clear_cookie)
+        wr_row.addWidget(b_clr)
         wr_row.addStretch(1)
-        self.lb_cookie_state = QLabel('')
-        self.lb_cookie_state.setObjectName('Hint')
-        self.lb_cookie_state.setWordWrap(True)
+        self.lb_cookie_state = wrap_label('', 'Hint')
         wr_row.addWidget(self.lb_cookie_state, 1)
         wv.addLayout(wr_row)
         col2.addWidget(c_wr)
@@ -4341,9 +4537,7 @@ class SettingsPage(QWidget):
         b_st.clicked.connect(self.on_net_test)
         net_row.addWidget(b_st)
         net_row.addStretch(1)
-        self.lb_net = QLabel('')
-        self.lb_net.setObjectName('Hint')
-        self.lb_net.setWordWrap(True)
+        self.lb_net = wrap_label('', 'Hint')
         net_row.addWidget(self.lb_net, 1)
         nv2.addLayout(net_row)
 
@@ -4390,8 +4584,26 @@ class SettingsPage(QWidget):
         col2.addWidget(about)
         col2.addStretch(1)
 
-        grid.addLayout(col1, 1)
-        grid.addLayout(col2, 1)
+        self._rebalance_columns(col1, col2)
+
+        # 下拉框默认会按「最长那一项」算最小宽度 —— AI 模型名一长就把卡片顶宽。
+        # 改成按固定字符数算，内容长了让下拉自己去滚动。
+        for cb in self.findChildren(QComboBox):
+            cb.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(10)
+
+        # 两列各套一层容器，并把水平方向设成 Ignored：
+        # 这样列宽严格按 stretch 平分（1:1），不会被某一列里较宽的控件
+        # 把宽度吃掉 —— 否则会出现「一列 468px、另一列 654px」这种歪斜。
+        colwrap = []
+        for lay in (col1, col2):
+            box = QWidget()
+            box.setLayout(lay)
+            box.setMinimumWidth(0)
+            box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            colwrap.append(box)
+        for box in colwrap:
+            grid.addWidget(box, 1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -4409,6 +4621,11 @@ class SettingsPage(QWidget):
         w = QWidget()
         layout.setContentsMargins(0, 0, 0, 0)
         w.setLayout(layout)
+        # 允许「宽度决定高度」的布局（比如会自动换行的 FlowLayout）正常起作用：
+        # 不打开这个标志，外层布局不知道它换行后要占多高，会把它压成一行。
+        sp = w.sizePolicy()
+        sp.setHeightForWidth(True)
+        w.setSizePolicy(sp)
         return w
 
     def refresh_stats(self):
@@ -4533,6 +4750,17 @@ class SettingsPage(QWidget):
         settings.set_value('weread_cookie', (text or '').strip())
         self._sync_cookie_keys()
 
+    def on_clear_cookie(self):
+        """清掉本机保存的登录信息。
+
+        存在的意义：万一你要把整个文件夹（含 data）发给朋友，
+        先点一下这里就不会把登录凭据一并带出去。
+        """
+        self.ed_cookie.setText('')          # 会触发 on_cookie 落盘
+        self.lb_cookie_keys.setText('')
+        self.lb_cookie_state.setText(T('set.cookie_cleared'))
+        self.win.toast(T('set.cookie_cleared'), kind='ok')
+
     def on_test_cookie(self):
         """验证 Cookie 是否有效。
 
@@ -4601,6 +4829,18 @@ class SettingsPage(QWidget):
             return
         settings.set_value('motion', bool(state))
         W.set_motion(bool(state))
+        # 动效一关，背景粒子就该停下来（别让它在后台白烧 CPU）
+        try:
+            self.win.backdrop.refresh_theme()
+        except Exception:
+            pass
+
+    def on_glass(self, state):
+        """磨砂玻璃开关：卡片半透明与背景光晕/粒子是一套的，一起开关。"""
+        if self._loading:
+            return
+        settings.set_value('glass', bool(state))
+        self.win.apply_style()
 
     def on_min_people(self, v):
         if self._loading:
@@ -4842,6 +5082,13 @@ class MainWindow(QMainWindow):
         root.setObjectName('Root')
         self.setCentralWidget(root)
 
+        # 铺一层背景装饰（柔和光晕 + 漂浮粒子）。它始终在最底下，
+        # 卡片是半透明的 —— 玻璃感就是这么来的。
+        self.backdrop = W.BackdropLayer(root)
+        self.backdrop.setGeometry(root.rect())
+        self.backdrop.lower()
+        self.backdrop.setVisible(bool(settings.get('glass')))
+
         # 无边框模式下多一层：最上面是自绘标题栏，下面才是「侧栏 | 内容」
         outer = QVBoxLayout(root)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -5041,12 +5288,19 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def apply_style(self):
         app = QApplication.instance()
+        glass = bool(settings.get('glass'))
         app.setStyleSheet(theme.build_qss(
-            settings.get('theme'), cur_mode(), int(settings.get('radius'))))
+            settings.get('theme'), cur_mode(), int(settings.get('radius')), glass))
         pal = theme.palette(settings.get('theme'), cur_mode(),
-                            int(settings.get('radius')))
+                            int(settings.get('radius')), glass)
         W.set_palette(pal)
         W.set_motion(bool(settings.get('motion')))
+        # 背景层：开关 + 按新配色重新出图（它的光晕是缓存位图，不刷新会留旧色）
+        try:
+            self.backdrop.setVisible(glass)
+            self.backdrop.refresh_theme()
+        except Exception:
+            pass
         try:
             W.set_caption_color(self, color_hex=pal['side_top'],
                                 dark=(cur_mode() == 'dark'))
@@ -5056,6 +5310,12 @@ class MainWindow(QMainWindow):
         for page in (self.page_library, self.page_export, self.page_search):
             for em in page.findChildren(W.EmptyState):
                 em.update()
+        # 大纲是用 HTML 渲染的，颜色写在标签里 —— 换主题必须重渲染一次，
+        # 否则会停留在旧配色上（这跟 QSS 管的控件不一样）
+        try:
+            self.page_outline.repaint_content()
+        except Exception:
+            pass
         try:
             self.btn_mode.setText('\u2600' if cur_mode() == 'dark' else '\U0001F319')
         except Exception:
@@ -5338,8 +5598,70 @@ class MainWindow(QMainWindow):
     def refresh_exports(self):
         self.page_export.refresh()
 
-    def refresh_library(self):
-        self.page_library.refresh()
+    def refresh_library(self, book_id=None):
+        """本地数据变了 —— 把所有依赖书库的页面一起刷新。
+
+        以前这里只刷新书库页，于是「刚抓完一本书，AI 大纲的下拉里还没有它」，
+        非得来回切一次页才出现 —— 页与页之间是割裂的。
+        现在统一走这一个出口：
+          · 侧栏底部的书库概览（本数 / 划线数）
+          · 本地书库页的表格与统计
+          · AI 大纲页的书籍下拉
+          · 导出记录页
+        """
+        try:
+            self._update_side()
+        except Exception:
+            pass
+        for page in (self.page_library, self.page_outline, self.page_export):
+            try:
+                page.refresh()
+            except Exception:
+                pass
+        if book_id not in (None, ''):
+            try:
+                self.page_library.select_book(book_id)
+            except Exception:
+                pass
+        self.notify_data_changed()
+
+    def notify_data_changed(self):
+        """数据变更广播。给顶部的「书库概览」小标签之类挂刷新用。
+
+        当前实现很简单（上面已经刷过了），但把它单独留一个名字，
+        是为了以后再加「同一份数据的别的视图」时有统一的挂钩点，
+        而不用满代码去找哪几个页面需要更新。
+        """
+        try:
+            self.lb_side_stats.update()
+        except Exception:
+            pass
+
+    def goto_outline(self, book_id=None, title=''):
+        """跳到 AI 大纲页并选中这本书（书库 / 搜索页跳过来用）。"""
+        self.switch_page(4)
+        if book_id in (None, ''):
+            return
+        ok = False
+        try:
+            self.page_outline.refresh()        # 确保刚入库的书也在下拉里
+            ok = self.page_outline.select_book(book_id)
+        except Exception:
+            ok = False
+        if ok:
+            self.toast(T('lib.to_outline_ok', title=title or ''), kind='ok', hold=3200)
+        else:
+            self.toast(T('lib.to_outline_miss'), kind='warn', hold=4400)
+
+    def goto_library(self, book_id=None):
+        """跳到本地书库并定位这本书（洞察台 / 搜索页跳过来用）。"""
+        self.switch_page(2)
+        if book_id in (None, ''):
+            return
+        try:
+            self.page_library.select_book(book_id)
+        except Exception:
+            pass
 
     def open_export_dir(self):
         os.makedirs(export_dir(), exist_ok=True)
@@ -5347,6 +5669,11 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        try:
+            # 背景层要跟着主窗口一起变大小（它不在布局里，得手动摆）
+            self.backdrop.setGeometry(self.centralWidget().rect())
+        except Exception:
+            pass
         try:
             if self.toast_layer.isVisible():
                 self.toast_layer.move(self.toast_layer._target_pos())
@@ -5437,10 +5764,12 @@ def main():
     # PDF 由界面层提供（依赖 Qt），在这里注册进 core 的渲染器表
     core.register_renderer('pdf', render_pdf, ext='.pdf', binary=True)
     app.setStyle('Fusion')
+    _glass = bool(settings.get('glass'))
     app.setStyleSheet(theme.build_qss(
-        settings.get('theme'), cur_mode(), int(settings.get('radius'))))
+        settings.get('theme'), cur_mode(), int(settings.get('radius')), _glass))
     app.setFont(QFont('Microsoft YaHei UI', 9))
-    W.set_palette(theme.palette(settings.get('theme'), cur_mode()))
+    W.set_palette(theme.palette(settings.get('theme'), cur_mode(),
+                                int(settings.get('radius')), _glass))
 
     ic = app_icon()
     if not ic.isNull():

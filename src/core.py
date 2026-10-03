@@ -449,6 +449,95 @@ def outline_book_md(tree):
     return '\n\n'.join(p for p in parts if p.strip())
 
 
+# 四级的语义（实测得出，和微信读书里看到的分层一致）：
+#   1 = 章标题      2 = 小节      3 = 要点      4 = 细节 / 支撑句
+OUTLINE_LEVEL_NAMES = {
+    1: ('章标题', 'Chapter'),
+    2: ('小节', 'Section'),
+    3: ('要点', 'Key point'),
+    4: ('细节', 'Detail'),
+}
+
+# 默认配色（导出独立 HTML 时用；界面里由 theme.palette() 覆盖）
+OUTLINE_COLORS = {
+    'title': '#4C1D95', 'sub': '#1E1B4B', 'point': '#37395C', 'detail': '#6B6F8C',
+    'rule': '#DDD9F5', 'dot': '#7C3AED',
+}
+
+
+def outline_item_html(text, level, colors=None):
+    """一条大纲 → 一段带层级的 HTML。Qt 的富文本只认 CSS 的一个子集，
+    所以这里只用 font-size / font-weight / color / margin / border-left /
+    padding，避免 flex、grid、shadow 那些它不认的东西。
+    """
+    c = dict(OUTLINE_COLORS)
+    c.update(colors or {})
+    t = esc(text)
+    lvl = max(1, int(level or 1))
+    if lvl <= 1:
+        return ('<p style="margin:20px 0 10px;font-size:17px;font-weight:700;'
+                'color:%s;line-height:1.5">%s</p>' % (c['title'], t))
+    if lvl == 2:
+        return ('<p style="margin:14px 0 8px;font-size:15px;font-weight:600;'
+                'color:%s;border-left:3px solid %s;padding-left:9px;'
+                'line-height:1.6">%s</p>' % (c['sub'], c['dot'], t))
+    if lvl == 3:
+        return ('<p style="margin:7px 0;font-size:14.5px;font-weight:400;'
+                'color:%s;padding-left:14px;text-indent:-9px;line-height:1.85">'
+                '<span style="color:%s">&#9679;</span>&nbsp; %s</p>'
+                % (c['point'], c['dot'], t))
+    return ('<p style="margin:5px 0 5px 24px;font-size:13.5px;font-weight:400;'
+            'color:%s;line-height:1.8">%s</p>' % (c['detail'], t))
+
+
+def outline_chapter_html(node, colors=None, with_title=True):
+    """一章大纲 → HTML 片段（章内保留层次）。"""
+    parts = []
+    items = (node or {}).get('items') or []
+    for i, it in enumerate(items):
+        lvl = max(1, int(it.get('level') or 1))
+        if lvl <= 1 and not with_title and i == 0:
+            continue
+        parts.append(outline_item_html(it.get('text') or '', lvl, colors))
+    return '\n'.join(parts)
+
+
+def outline_book_html_body(tree, colors=None):
+    """整本大纲 → HTML 片段（每章一个 section）。"""
+    c = dict(OUTLINE_COLORS)
+    c.update(colors or {})
+    secs = []
+    for node in (tree or []):
+        inner = outline_chapter_html(node, c, with_title=True)
+        if not inner.strip():
+            continue
+        secs.append('<div style="margin:0 0 18px">%s</div>' % inner)
+    return '\n'.join(secs)
+
+
+def outline_book_html(tree, title='', colors=None):
+    """整本大纲 → 一份可直接双击打开的独立 HTML。"""
+    c = dict(OUTLINE_COLORS)
+    c.update(colors or {})
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>%s · AI 大纲</title><style>'
+        'body{margin:0;background:#F6F7FC;color:#1E1B4B;'
+        'font:15px/1.85 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}'
+        'header{background:linear-gradient(135deg,#6366F1,#7C3AED);color:#fff;'
+        'padding:34px 22px}h1{margin:0;font-size:22px;font-weight:700}'
+        'header p{margin:6px 0 0;opacity:.85;font-size:14px}'
+        'main{max-width:780px;margin:26px auto 60px;padding:0 18px}'
+        'section{background:#fff;border-radius:14px;padding:20px 24px;'
+        'margin-bottom:16px;box-shadow:0 2px 12px rgba(60,50,120,.07)}'
+        '</style></head><body><header><h1>《%s》· AI 大纲</h1>'
+        '<p>共 %d 章带要点</p></header><main>%s</main></body></html>'
+        % (esc(title), esc(title), len(tree or []),
+           ''.join('<section>%s</section>' % outline_chapter_html(n, c)
+                   for n in (tree or []))))
+
+
 def _initial_state(html):
     """从 SSR 页面里抠出 window.__INITIAL_STATE__ 的 JSON（括号计数法）。"""
     i = (html or '').find('window.__INITIAL_STATE__')
